@@ -53,6 +53,57 @@ function noise({ at = 0, dur = 0.25, gain = 0.05, freq = 1200 } = {}) {
   src.start(t);
 }
 
+// 店のざわめき（低いノイズ）と暖炉のはぜる音
+let amb = null;
+function ambience(on) {
+  if (!on || !enabled) {
+    if (amb) {
+      amb.gain.gain.setTargetAtTime(0, amb.ctx.currentTime, 0.3);
+      const old = amb;
+      setTimeout(() => {
+        try {
+          old.src.stop();
+        } catch {
+          /* 停止済み */
+        }
+      }, 1200);
+      clearTimeout(old.timer);
+      amb = null;
+    }
+    return;
+  }
+  if (amb) return;
+  const a = audio();
+  if (!a) return;
+  const len = a.sampleRate * 4;
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const data = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; // ブラウンノイズ
+    data[i] = last * 3.5;
+  }
+  const src = a.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 520;
+  const gain = a.createGain();
+  gain.gain.value = 0;
+  gain.gain.setTargetAtTime(0.06, a.currentTime, 1);
+  src.connect(lp).connect(gain).connect(a.destination);
+  src.start();
+  amb = { ctx: a, src, gain, timer: null };
+  const crackle = () => {
+    if (!amb) return;
+    const pops = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < pops; i++) noise({ at: i * 0.04, dur: 0.03, gain: 0.03 + Math.random() * 0.03, freq: 1800 + Math.random() * 2500 });
+    amb.timer = setTimeout(crackle, 300 + Math.random() * 1600);
+  };
+  crackle();
+}
+
 export const sfx = {
   get enabled() {
     return enabled;
@@ -67,10 +118,20 @@ export const sfx = {
   },
   pick: () => tone(660, { dur: 0.08, type: 'triangle', gain: 0.06 }),
   flip: () => noise({ dur: 0.12, gain: 0.08, freq: 2400 }),
+  // 木の卓にジョッキを置く音
   seat: () => {
-    noise({ dur: 0.08, gain: 0.06, freq: 500 });
-    tone(220, { dur: 0.1, type: 'triangle', gain: 0.05 });
+    noise({ dur: 0.07, gain: 0.07, freq: 380 });
+    tone(150, { dur: 0.12, type: 'sine', gain: 0.08, to: 90 });
+    tone(1900, { at: 0.02, dur: 0.18, type: 'sine', gain: 0.012 });
   },
+  // 入口のドアベル
+  bell: () => {
+    [[1318, 0], [1046, 0.16], [1318, 0.42], [1046, 0.58]].forEach(([f, at]) => {
+      tone(f, { at, dur: 0.6, type: 'sine', gain: 0.045 });
+      tone(f * 2.76, { at, dur: 0.25, type: 'sine', gain: 0.01 });
+    });
+  },
+  ambience,
   alarm: () => {
     tone(520, { dur: 0.14, type: 'square', gain: 0.04 });
     tone(390, { at: 0.16, dur: 0.22, type: 'square', gain: 0.04 });

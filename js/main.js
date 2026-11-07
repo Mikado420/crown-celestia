@@ -93,6 +93,7 @@ function leave(message) {
   anim.token++;
   anim.running = false;
   history.replaceState(null, '', location.pathname);
+  sfx.ambience(false);
   renderTitle();
   if (message) toast(message);
 }
@@ -111,6 +112,7 @@ dlg.menu.addEventListener('click', (e) => {
     dlg.rules.showModal();
   } else if (what === 'sound') {
     sfx.enabled = !sfx.enabled;
+    sfx.ambience(sfx.enabled && document.body.dataset.screen === 'game');
     syncSoundLabel();
     sfx.pick();
   } else if (what === 'leave') {
@@ -148,24 +150,25 @@ function renderTitle() {
   const saved = storage('cc-name') || '';
   app.innerHTML = `
   <main class="title">
-    <div class="crest" aria-hidden="true">
-      <span class="star s1"></span><span class="star s2"></span><span class="star s3"></span>
-      ${ICON.crown}
+    <div class="hang-sign" aria-hidden="true">
+      <span class="chain l"></span><span class="chain r"></span>
+      <div class="plank">${ICON.mug}<span>酔いどれ竜亭</span></div>
     </div>
     <p class="series">クラウン・セレスティア</p>
     <h1>酒場のツケ</h1>
     <p class="tagline">満席の卓に座った者が、全員分を払う。</p>
     <div class="title-form">
       <input type="text" id="name" maxlength="12" placeholder="あなたの名前" value="${esc(saved)}" aria-label="あなたの名前">
-      ${roomFromUrl ? '' : '<button class="btn wide" id="host">部屋を作って友達を招く</button>'}
+      ${roomFromUrl ? '' : '<button class="btn wide" id="host">店を開いて友達を招く</button>'}
       <div class="join">
-        <input type="text" id="code" maxlength="5" placeholder="部屋コード" autocapitalize="characters" value="${esc(roomFromUrl)}" aria-label="部屋コード">
+        <input type="text" id="code" maxlength="5" placeholder="合言葉（部屋コード）" autocapitalize="characters" value="${esc(roomFromUrl)}" aria-label="部屋コード">
         <button class="btn ${roomFromUrl ? '' : 'ghost'}" id="join">入る</button>
       </div>
       ${roomFromUrl ? '' : '<button class="btn ghost wide" id="solo">CPUと練習する</button>'}
       <button class="linklike" id="rulesBtn">遊び方</button>
     </div>
-  </main>`;
+  </main>
+  <div class="facade" aria-hidden="true"><i class="win w1"></i><i class="win w2"></i><i class="door"></i><i class="win w3"></i><i class="win w4"></i></div>`;
   const getName = () => {
     const name = $('#name').value.trim().slice(0, 12) || '名無しの冒険者';
     storage('cc-name', name);
@@ -175,7 +178,7 @@ function renderTitle() {
   $('#solo')?.addEventListener('click', () => startHost(getName(), false));
   $('#host')?.addEventListener('click', (e) => {
     e.currentTarget.disabled = true;
-    e.currentTarget.textContent = '部屋を準備しています…';
+    e.currentTarget.textContent = '店を準備しています…';
     startHost(getName(), true).catch((err) => {
       renderTitle();
       toast(err.message);
@@ -258,10 +261,10 @@ function renderLobby() {
     </header>
     ${lobby.code ? `
     <section class="room">
-      <span class="room-label">部屋コード</span>
+      <span class="room-label">今夜の合言葉</span>
       <span class="code">${esc(lobby.code)}</span>
       <button class="btn small" id="copy">招待リンクをコピー</button>
-    </section>` : '<p class="solo-note">CPUと練習（席をタップしてCPUを増減）</p>'}
+    </section>` : '<p class="solo-note">練習の夜（空いた席をタップすると常連客が来ます）</p>'}
     <section class="seats-grid">${seats}</section>
     <p class="lobby-hint">${isHost
       ? n < MIN_PLAYERS ? `あと${MIN_PLAYERS - n}人で開店できます` : `${n}人・格1〜${n * HAND_SIZE + 5}の冒険者で${n === 2 ? 4 : 3}晩`
@@ -292,6 +295,7 @@ function renderLobby() {
 // ---------- 対局画面 ----------
 function mountGame() {
   document.body.dataset.screen = 'game';
+  sfx.ambience(true);
   app.innerHTML = `
   <main class="game">
     <header class="bar">
@@ -302,7 +306,7 @@ function mountGame() {
         <span id="clockText"></span>
       </div>
     </header>
-    <ul class="patrons" id="patrons"></ul>
+    <div class="board"><span class="board-plate">ツケ帳</span><ul class="patrons" id="patrons"></ul></div>
     <section class="tables" id="tables">
       ${TABLE_NAMES.map((name, i) => `
         <div class="table" data-table="${i}" aria-label="${name}">
@@ -311,7 +315,7 @@ function mountGame() {
           <span class="caption"></span>
         </div>`).join('')}
     </section>
-    <p class="prompt" id="prompt"></p>
+    <div class="prompt" id="prompt"><span class="master" aria-hidden="true">竜</span><p class="line" id="promptLine"></p></div>
     <section class="tray" id="tray">
       <div class="hand" id="hand"></div>
       <div class="stage" id="stage"></div>
@@ -351,16 +355,23 @@ function onState(next) {
   if (!anim.running) updateGame();
 }
 
+// 案内は竜人のマスターのひと言として出す
 function setPrompt(text, tone = '') {
   const el = $('#prompt');
-  el.textContent = text;
+  const line = $('#promptLine');
+  if (line.textContent === text && el.dataset.tone === tone) return;
+  line.textContent = text;
   el.dataset.tone = tone;
+  el.classList.toggle('quiet', !text);
+  line.classList.remove('say');
+  void line.offsetWidth;
+  line.classList.add('say');
 }
 
 function updateBar() {
   const v = view;
   const nights = Array.from({ length: v.rounds }, (_, i) => `<i class="${i < v.round ? 'lit' : ''}"></i>`).join('');
-  $('#night').innerHTML = `<span class="pips" aria-label="第${v.round}晩／全${v.rounds}晩">${nights}</span><span>第${v.round}晩</span><span class="turn">${Math.min(v.turn, HAND_SIZE)}／${HAND_SIZE}杯目</span>`;
+  $('#night').innerHTML = `<span class="chain l"></span><span class="chain r"></span><span class="sign-name">酔いどれ竜亭</span><span class="sign-row"><span>第${v.round}晩</span><span class="pips" aria-label="全${v.rounds}晩">${nights}</span><span class="turn">${Math.min(v.turn, HAND_SIZE)}杯目</span></span>`;
 }
 
 function patronState(p) {
@@ -409,8 +420,11 @@ function drawTables(tables) {
 
 // 手札と公開台のカードを、台の空きに合わせて最大の大きさにする
 function trayRoom() {
-  const tray = $('#tray');
-  return { W: tray.clientWidth - 8, H: tray.clientHeight - 8, base: $('.slot')?.offsetWidth || 48 };
+  const hand = $('#hand');
+  const cs = getComputedStyle(hand);
+  const W = hand.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const H = hand.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) + 14;
+  return { W, H, base: $('.slot')?.offsetWidth || 48 };
 }
 
 function layoutHand() {
@@ -501,7 +515,7 @@ function updateGame() {
   if (v.phase === 'choosing' && v.round !== shownRound) {
     shownRound = v.round;
     showBanner(`第${v.round}晩 開店`, `今夜の大酒飲み　格${v.heavy.join('・格')}`);
-    sfx.open();
+    sfx.bell();
   }
 
   if (v.phase === 'choosingTable') {
@@ -514,16 +528,16 @@ function updateGame() {
       drawStage(v.revealed, true);
     }
     if (v.awaiting === v.you) {
-      setPrompt('相席お断り！ 勘定を肩代わりする卓を選んで', 'alert');
+      setPrompt('相席はお断りだとさ。どの卓のツケを持つ？', 'alert');
       sfx.alarm();
     } else {
-      setPrompt(`${nameOf(v.awaiting)}が肩代わりする卓を選んでいます`);
+      setPrompt(`${nameOf(v.awaiting)}が、肩代わりする卓を選んでるぜ`);
     }
   } else {
     drawHand();
     if (v.phase === 'choosing') {
-      if (v.myPlay == null) setPrompt('酒場へ案内する冒険者を1人選ぼう', 'go');
-      else setPrompt(`格${v.myPlay}を案内中（全員そろうまで変更できます）`);
+      if (v.myPlay == null) setPrompt('いらっしゃい。次の客を案内しな', 'go');
+      else setPrompt(`格${v.myPlay}の客だな。全員そろうまで変えていいぜ`);
     } else {
       setPrompt('');
     }
@@ -582,7 +596,7 @@ async function runResolution(res) {
   const tables = res.startTables.map((t) => [...t]);
   drawTables(tables);
   $$('.table').forEach((t) => t.classList.remove('pickable'));
-  setPrompt('格の低い順に着席します');
+  setPrompt('格の低い客から席につくぞ');
 
   const key = `${res.round}-${res.turn}`;
   if (anim.flippedKey !== key) {
@@ -612,7 +626,8 @@ async function runResolution(res) {
     } else {
       const row = tableEl(e.table);
       row.classList.add(e.type === 'full' ? 'is-full' : 'is-refused');
-      row.querySelector('.caption').textContent = e.type === 'full' ? `${nameOf(e.pid)}が6人目！ 満席` : `${nameOf(e.pid)}は相席お断り！`;
+      row.querySelector('.caption').textContent = e.type === 'full' ? `満席だ！ ${nameOf(e.pid)}が全員分` : `${nameOf(e.pid)}は相席お断り！`;
+      setPrompt(e.type === 'full' ? `6人目は${nameOf(e.pid)}か。この卓の勘定、${e.amount}枚な` : `相席は断られた。${nameOf(e.pid)}が${e.amount}枚肩代わりだ`, 'alert');
       sfx.alarm();
       await sleep(T.takeMs * 0.28);
       if (!alive()) return;
@@ -641,6 +656,7 @@ async function runResolution(res) {
       await until(budget - 120);
       row.classList.remove('is-full', 'is-refused');
       row.querySelector('.caption').textContent = '';
+      setPrompt('格の低い客から席につくぞ');
     }
     await until(budget);
   }
@@ -669,8 +685,8 @@ function renderLedger() {
   wrap.innerHTML = `
   <section class="ledger${final ? ' final' : ''}" role="dialog" aria-label="${final ? '大会の結果' : `第${v.round}晩の勘定`}">
     ${final ? `<div class="ledger-crown">${ICON.crown}</div>` : ''}
-    <h2>${final ? `${esc(winners.join('と'))}の勝利` : `第${v.round}晩の勘定`}</h2>
-    <p class="ledger-sub">${final ? 'ツケが一番少ない者が、天上の王冠に近づいた' : `酔いつぶれて寝ていたのは格${v.lastSleeper}`}</p>
+    <h2>${final ? `${esc(winners.join('と'))}の勝利` : `第${v.round}晩、閉店`}</h2>
+    <p class="ledger-sub">${final ? 'ツケが一番少ない者が、天上の王冠に近づいた' : `今夜のツケ。隅で寝ていたのは格${v.lastSleeper}の客`}</p>
     <ol class="ledger-list">
       ${v.ranking.map((r) => `
         <li class="${r.place === 1 ? 'top' : ''}${r.id === v.you ? ' me' : ''}" style="--c:${SEAT_COLORS[idx[r.id]]}">
