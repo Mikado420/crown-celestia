@@ -205,7 +205,7 @@ body[data-game='duel'] .facade .door { background: radial-gradient(circle at 50%
 
 /* 手札・道具・公開台 */
 .d-tray {
-  position: relative; display: grid; grid-template-rows: auto auto; align-content: start; gap: 4px;
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; align-content: start; gap: 4px;
   min-height: calc(var(--hw) * 1.36 + 66px);
   margin: 0 -12px calc(-6px - env(safe-area-inset-bottom)); padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   background: linear-gradient(180deg, #2b1f60f2, #140f33);
@@ -225,7 +225,7 @@ body[data-game='duel'] .facade .door { background: radial-gradient(circle at 50%
 .d-help { width: 100%; margin: 0; font-size: 11px; color: var(--star); display: flex; align-items: center; gap: 4px; }
 .d-help b { color: #fff; }
 .d-hi { width: 14px; height: 14px; stroke: var(--star); stroke-width: 2; fill: none; flex: none; }
-.d-hand { display: flex; justify-content: center; align-items: flex-end; padding: 10px 0 2px; min-height: calc(var(--hw) * 1.36 + 12px); }
+.d-hand { display: flex; justify-content: center; align-items: flex-end; width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 0 2px; min-height: calc(var(--hw) * 1.36 + 12px); }
 .d-hand > * { --cw: var(--hw); transition: transform .15s cubic-bezier(.3, 1.4, .5, 1); cursor: pointer; }
 .d-hand > * + * { margin-left: var(--step, 6px); }
 .d-hand > *:hover:not(:disabled) { transform: translateY(-6px); z-index: 2; }
