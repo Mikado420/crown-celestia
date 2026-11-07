@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>酒場のツケ｜クラウン・セレスティア</title>
+  <meta name="description" content="天空の王国セレスティアの酒場で遊ぶ、2〜6人の同時出しカードゲーム。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="rules">
+    <h2>酒場のツケの遊び方</h2>
+    <p>冒険者たちを酒場の4つの卓に案内します。ツケが一番少ない人が勝ちです。</p>
+    <ol>
+      <li>全員が同時に、手札から冒険者を1人選んで案内します。全員がそろうまで選び直せます。</li>
+      <li>格（数字）の小さい冒険者から順に座ります。座る卓は自動で決まり、自分より格が低い中で一番近い冒険者が端にいる卓です。</li>
+      <li>卓に座れるのは5人まで。6人目として座った人は、その卓5人分の勘定をツケで払い、新しい卓の主になります。</li>
+      <li>どの卓の端よりも格が低い冒険者は相席を断られます。好きな卓を1つ選んで勘定を肩代わりし、その卓に座り直します。</li>
+    </ol>
+    <p>カードの右下にある硬貨の数がツケの額です。毎晩2人の「大酒飲み」が現れ、ツケが5になります。1人は酔いつぶれて寝ているので、その晩は出てきません。10手番で1晩、2人なら4晩、3〜6人なら3晩で大会が終わります。</p>
+    <form method="dialog"><button class="btn">閉じる</button></form>
+  </dialog>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
