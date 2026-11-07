@@ -232,7 +232,7 @@ input[type=text]::placeholder { color: #8c8f86; }
 .title-form { width: 100%; display: grid; gap: 10px; }
 
 /* 演目（ゲーム）の選択 */
-.game-pick { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.game-pick { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
 .gp-card {
   display: grid; justify-items: center; gap: 2px; padding: 10px 6px; border: 0; border-radius: 12px; cursor: pointer;
   background: #0b111fcc; color: var(--chalk); box-shadow: inset 0 0 0 1.5px #ffffff22;
@@ -241,10 +241,10 @@ input[type=text]::placeholder { color: #8c8f86; }
 .gp-card:hover { transform: translateY(-2px); }
 .gp-card.on { background: linear-gradient(180deg, #2a2213, #14100a); box-shadow: inset 0 0 0 2px var(--mead), 0 0 18px #f0bb4b55; }
 .gp-icon svg { width: 26px; height: 26px; stroke: var(--mead); stroke-width: 1.6; fill: #f0bb4b33; stroke-linecap: round; stroke-linejoin: round; }
-.gp-title { font-family: var(--serif); font-weight: 800; font-size: 16px; }
+.gp-title { font-family: var(--serif); font-weight: 800; font-size: 14px; white-space: nowrap; }
 .gp-meta { font-size: 10px; color: var(--chalk-dim); }
-.lobby-games { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.lg-tab {
+.lobby-games { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.lg-tab { white-space: nowrap; font-size: 12px !important;
   display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 0; border-radius: 10px; cursor: pointer;
   background: #00000055; color: var(--chalk-dim); font-weight: 700; font-size: 13px; box-shadow: inset 0 0 0 1px #ffffff22;
 }

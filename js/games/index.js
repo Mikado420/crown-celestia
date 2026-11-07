@@ -1,6 +1,7 @@
 // ゲームの一覧（演目）
 import { tavernMode } from './tavern/mode.js';
 import { groveMode } from './grove/mode.js';
+import { duelMode } from './duel/mode.js';
 
 export const GAMES = {
   tavern: {
@@ -18,6 +19,14 @@ export const GAMES = {
     motif: '藪の中風',
     minutes: '15〜20分',
     mode: groveMode,
+  },
+  duel: {
+    id: 'duel',
+    title: '魔法陣の決闘',
+    tagline: '隣の魔導士と、精霊を並べて魔法陣を奪い合う。',
+    motif: 'バトルライン風',
+    minutes: '15分前後',
+    mode: duelMode,
   },
 };
 

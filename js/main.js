@@ -4,22 +4,26 @@ import { hostRoom, joinRoom, normalizeCode } from './net.js';
 import { GAMES, GAME_IDS, DEFAULT_GAME } from './games/index.js';
 import { TIMING as TAVERN_TIMING } from './games/tavern/mode.js';
 import { TIMING as GROVE_TIMING } from './games/grove/mode.js';
+import { TIMING as DUEL_TIMING } from './games/duel/mode.js';
 import { tavernScreen } from './games/tavern/screen.js';
 import { groveScreen } from './games/grove/screen.js';
+import { duelScreen } from './games/duel/screen.js';
 import { esc, ICON, SEAT_COLORS, initial } from './ui.js';
 import { sfx } from './sfx.js';
 
 // ?fast を付けると待ち時間を短くした確認用モードになる
 if (new URLSearchParams(location.search).has('fast')) {
   Object.assign(TAVERN_TIMING, { revealMs: 400, stepMs: 160, takeMs: 600, roundBreakMs: 1500, cpuMinMs: 50, cpuMaxMs: 150, chooseMs: 4000, tableMs: 3000 });
+  Object.assign(DUEL_TIMING, { chooseMs: 4000, revealMs: 300, placeMs: 120, spellMs: 300, decideMs: 300, roundBreakMs: 1500, cpuMinMs: 50, cpuMaxMs: 150 });
   Object.assign(GROVE_TIMING, { actMs: 3000, testifyMs: 2500, bigActMs: 3000, bigTestifyMs: 2500, accuseMs: 3000, actionAnimMs: 200, revealMs: 1600, caseBreakMs: 1500, cpuMinMs: 50, cpuMaxMs: 150 });
 }
 
-const SCREENS = { tavern: tavernScreen, grove: groveScreen };
+const SCREENS = { tavern: tavernScreen, grove: groveScreen, duel: duelScreen };
 
 // 看板とタイトル画面の見た目（ゲームごと）
 const SIGNS = {
   tavern: { name: '酔いどれ竜亭', icon: ICON.mug, lobby: '今夜の合言葉', start: '開店する', hostBtn: '店を開いて友達を招く', solo: '練習の夜（空いた席をタップすると常連客が来ます）' },
+  duel: { name: '天空の魔導院', icon: ICON.crown, lobby: '試験の合言葉', start: '試験を始める', hostBtn: '試験を開いて友達を招く', solo: '練習の試験（空いた席をタップすると魔導士が来ます）' },
   grove: { name: '王城の大広間', icon: ICON.goblet, lobby: '晩餐会の合言葉', start: '晩餐会を始める', hostBtn: '晩餐会を開いて友達を招く', solo: '練習の晩餐会（空いた席をタップすると客が来ます）' },
 };
 
@@ -42,6 +46,15 @@ const RULES = {
       <li>2周したら全員が同時に告発します。当たりは<b>賭け×（外れた人数＋1）</b>点、外れは−賭け。本当の証言1つにつき+1点。</li>
     </ol>
     <p>事件は人数と同じ数（2人なら6件）。合計点が一番高い人の勝ちです。</p>`,
+  duel: `
+    <h2>魔法陣の決闘の遊び方</h2>
+    <ol>
+      <li>隣り合う2人の間に魔法陣が並びます（2人なら7つ、3人は決闘ごとに3つ、4〜6人は2つ）。自分は左右の隣と同時に戦います。</li>
+      <li>全員が同時に、精霊を1体自分側の魔法陣に置くか、秘術を1枚使います。そのあと精霊か秘術の山から1枚引きます。<b>パスはできません。</b></li>
+      <li>片側3体の役で勝負。強い順に<b>同じ属性の連番 ＞ 同じ数字 ＞ 同じ属性 ＞ 連番 ＞ バラ</b>。同じ役なら合計、それも同じなら先にそろえた方。</li>
+      <li>相手がもう逆転できなくなった魔法陣は、自動で決着します。</li>
+    </ol>
+    <p>魔法陣1つで1点、1つの決闘の陣を全部取ると+1点（2人のときは4つか隣り合う3つで即勝利+2点）。3ラウンドの合計で競います。秘術は手札に2枚まで。</p>`,
 };
 
 const app = document.getElementById('app');
@@ -336,7 +349,9 @@ function renderLobby() {
   }).join('');
   const detail = gid === 'tavern'
     ? `${n}人・格1〜${n * 10 + 5}の冒険者で${n === 2 ? 4 : 3}晩`
-    : `${n}人・事件${n === 2 ? 6 : n}件`;
+    : gid === 'grove'
+      ? `${n}人・事件${n === 2 ? 6 : n}件`
+      : `${n}人・${n === 2 ? '1対1で魔法陣7つ' : n === 3 ? '三つ巴で魔法陣9つ' : `輪になって魔法陣${n * 2}つ`}・3ラウンド`;
   app.innerHTML = `
   <main class="lobby">
     <header class="lobby-head">
