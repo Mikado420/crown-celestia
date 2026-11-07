@@ -7,22 +7,22 @@ import { cpuChooseCard, cpuChooseTable } from './cpu.js';
 export const TIMING = {
   chooseMs: 30000, // カードを選ぶ制限時間
   tableMs: 20000, // 卓を選ぶ制限時間
-  revealMs: 1400, // 公開してから着席が始まるまで
-  stepMs: 750, // 1人が着席する演出の長さ
+  revealMs: 1500, // 出し札を表に返してから着席が始まるまで
+  stepMs: 650, // 1人が着席する演出の長さ
+  takeMs: 2000, // 満席・相席お断りでツケを払う演出の長さ
   roundBreakMs: 9000, // ラウンド間の休憩
   cpuMinMs: 1200,
   cpuMaxMs: 3500,
 };
 
-const CPU_NAMES = [
-  '酔いどれドワーフのボルグ',
-  '吟遊詩人リュート',
-  '見習い魔導士ミル',
-  '傭兵ガルド',
-  '盗賊ネズミのチッタ',
-  '老賢者オルヴァン',
-  '竜騎士セラ',
-];
+// 着席の演出にかかる時間（画面側もこの値に合わせて動く）
+export function resolutionMs(resolution, timing = TIMING) {
+  const steps = resolution.events.reduce((sum, e) => sum + (e.type === 'seat' ? timing.stepMs : timing.takeMs), 0);
+  return timing.revealMs + steps + 600;
+}
+
+// 画面の小さなプレイヤー欄に収まるよう短い名前にしている
+const CPU_NAMES = ['ドワーフのボルグ', '詩人リュート', '魔導士ミル', '傭兵ガルド', '盗賊チッタ', '賢者オルヴァン', '竜騎士セラ'];
 
 export class HostController {
   constructor({ hostName, send, onView, roomCode = null, timing = TIMING, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t), random = Math.random }) {
@@ -123,6 +123,15 @@ export class HostController {
     this.broadcast();
   }
 
+  // ホストが退出するとき、参加者に店じまいを知らせる
+  closeRoom() {
+    this.clearAll();
+    for (const p of this.players) {
+      if (p.connId) this.send(p.connId, { type: 'closed', message: 'ホストが店を閉めました' });
+    }
+    this.onView = null;
+  }
+
   hostAction(msg) {
     if (msg.type === 'addCpu') return this.addCpu();
     if (msg.type === 'remove') return this.removePlayer(msg.id);
@@ -165,7 +174,7 @@ export class HostController {
     // 新しい着席処理があれば、演出が終わるまで次の行動を待たせる
     if (s.resolution && s.resolution.seq !== this.lastAnimSeq) {
       this.lastAnimSeq = s.resolution.seq;
-      this.busyUntil = now + this.timing.revealMs + s.resolution.events.length * this.timing.stepMs + 600;
+      this.busyUntil = now + resolutionMs(s.resolution, this.timing);
     }
     const wait = Math.max(0, this.busyUntil - now);
     const key = `${s.round}-${s.turn}-${s.phase}`;

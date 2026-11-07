@@ -1,25 +1,36 @@
 import { HostController, TIMING } from './host.js';
 import { hostRoom, joinRoom, normalizeCode } from './net.js';
-import { baseTab, HEAVY_TAB, SEAT_LIMIT, TABLE_NAMES, MIN_PLAYERS, MAX_PLAYERS } from './game.js';
+import { SEAT_LIMIT, TABLE_NAMES, MIN_PLAYERS, MAX_PLAYERS, HAND_SIZE } from './game.js';
+import { esc, cardHtml, flipHtml, tallyHtml, TABLE_ICONS, ICON, SEAT_COLORS, tabOf } from './art.js';
+import { sfx } from './sfx.js';
 
 // ?fast を付けると待ち時間を短くした確認用モードになる
 if (new URLSearchParams(location.search).has('fast')) {
-  Object.assign(TIMING, { revealMs: 150, stepMs: 80, roundBreakMs: 1500, cpuMinMs: 50, cpuMaxMs: 150, chooseMs: 4000, tableMs: 3000 });
+  Object.assign(TIMING, { revealMs: 400, stepMs: 160, takeMs: 600, roundBreakMs: 1500, cpuMinMs: 50, cpuMaxMs: 150, chooseMs: 4000, tableMs: 3000 });
 }
 
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
-const rulesEl = document.getElementById('rules');
+const dlg = {
+  rules: document.getElementById('rules'),
+  menu: document.getElementById('menu'),
+  confirm: document.getElementById('confirm'),
+};
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 let session = null; // { role: 'solo' | 'host' | 'client', host?, net? }
 let lobby = null;
 let view = null;
 let deadlineAt = null;
-let timerHandle = null;
-const anim = { seq: 0, running: false, tables: null, plays: null, done: 0, burst: null, fresh: null };
+let deadlineTotal = 1;
+let lastTick = null;
+let shownRound = 0;
+let ledgerShownFor = null;
+const anim = { running: false, seq: 0, token: 0, flippedKey: null };
 
-// ---------- 小物 ----------
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+const $ = (sel, root = app) => root.querySelector(sel);
+const $$ = (sel, root = app) => [...root.querySelectorAll(sel)];
 
 function storage(key, value) {
   try {
@@ -28,6 +39,7 @@ function storage(key, value) {
   } catch {
     return null;
   }
+  return null;
 }
 
 let toastTimer = null;
@@ -38,40 +50,8 @@ function toast(message) {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3200);
 }
 
-const JOBS = ['見習い', '村の剣士', '盗賊', '弓使い', '僧侶', '吟遊詩人', '狩人', '魔導士', '錬金術師', '騎士', '聖騎士', '竜騎士'];
-function jobOf(rank, deckSize) {
-  if (rank === 55) return 'ギルド長';
-  return JOBS[Math.min(JOBS.length - 1, Math.floor(((rank - 1) / deckSize) * JOBS.length))];
-}
-
-function tabFor(rank) {
-  return view?.heavy.includes(rank) ? HEAVY_TAB : baseTab(rank);
-}
-
-function cardHtml(rank, { tag = 'div', attrs = '', cls = '' } = {}) {
-  const tab = tabFor(rank);
-  const heavy = view?.heavy.includes(rank);
-  const coins = '<i></i>'.repeat(tab);
-  return `<${tag} class="card t${tab} ${cls}" ${attrs} aria-label="格${rank}、ツケ${tab}${heavy ? '、大酒飲み' : ''}">
-    ${heavy ? '<span class="badge">大酒飲み</span>' : ''}
-    <span class="rank">${rank}</span>
-    <span class="job">${jobOf(rank, view?.deckSize ?? 104)}</span>
-    <span class="coins">${coins}</span>
-  </${tag}>`;
-}
-
-// 正の字でツケを書く（1画ずつ）
-const STROKES = ['M3 3H17', 'M10 3V17', 'M10 10H15', 'M5 9V17', 'M2 17H18'];
-function tallyHtml(n) {
-  let out = '';
-  for (let left = n; left > 0; left -= 5) {
-    const strokes = STROKES.slice(0, Math.min(5, left)).map((d) => `<path d="${d}"/>`).join('');
-    out += `<svg viewBox="0 0 20 20" aria-hidden="true">${strokes}</svg>`;
-  }
-  return `<div class="tally">${out}</div>`;
-}
-
-const nameOf = (pid) => view?.players.find((p) => p.id === pid)?.name ?? '???';
+const nameOf = (pid) => (pid === view?.you ? 'あなた' : view?.players.find((p) => p.id === pid)?.name ?? '???');
+const initial = (name) => Array.from(String(name ?? '?'))[0] ?? '?';
 
 // ---------- 通信の窓口 ----------
 function act(msg) {
@@ -85,100 +65,136 @@ function onMessage(msg) {
   if (msg.type === 'lobby') {
     lobby = msg;
     view = null;
-    anim.seq = 0;
+    anim.token++;
     anim.running = false;
+    anim.seq = 0;
+    anim.flippedKey = null;
+    shownRound = 0;
+    ledgerShownFor = null;
     renderLobby();
   } else if (msg.type === 'state') {
     onState(msg.view);
   } else if (msg.type === 'error') {
     toast(msg.message);
-  } else if (msg.type === 'kicked') {
+  } else if (msg.type === 'kicked' || msg.type === 'closed') {
     leave(msg.message);
   }
 }
 
 function leave(message) {
-  if (session?.host) {
-    session.host.clearAll();
-    session.host.onView = null;
-  }
-  session?.net?.close?.();
+  if (!session) return;
+  const s = session;
   session = null;
+  if (s.host) s.host.closeRoom();
+  // 店じまいの知らせが届くよう、少し待ってから切断する
+  setTimeout(() => s.net?.close?.(), s.host ? 400 : 0);
   lobby = null;
   view = null;
+  anim.token++;
   anim.running = false;
   history.replaceState(null, '', location.pathname);
   renderTitle();
   if (message) toast(message);
 }
 
-// ---------- タイトル ----------
-function savedName() {
-  return storage('cc-name') || '';
+// ---------- メニューと退出 ----------
+function syncSoundLabel() {
+  $('[data-menu="sound"]', dlg.menu).textContent = `効果音：${sfx.enabled ? 'オン' : 'オフ'}`;
 }
 
+dlg.menu.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-menu]');
+  if (!btn) return;
+  const what = btn.dataset.menu;
+  if (what === 'rules') {
+    dlg.menu.close();
+    dlg.rules.showModal();
+  } else if (what === 'sound') {
+    sfx.enabled = !sfx.enabled;
+    syncSoundLabel();
+    sfx.pick();
+  } else if (what === 'leave') {
+    dlg.menu.close();
+    askLeave();
+  }
+});
+
+function askLeave() {
+  const inGame = !!view;
+  let text = '';
+  if (session?.role === 'solo') text = '練習をやめて、タイトルに戻ります。';
+  else if (session?.role === 'host') text = inGame ? 'あなたが退出すると店が閉まり、全員の対局が終わります。' : 'あなたが退出すると部屋が閉じます。';
+  else text = inGame ? 'あなたの席は、この後CPUが代わりに打ちます。' : '部屋から抜けます。';
+  $('#confirmText', dlg.confirm).textContent = text;
+  dlg.confirm.showModal();
+}
+
+dlg.confirm.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-confirm]');
+  if (!btn) return;
+  dlg.confirm.close();
+  if (btn.dataset.confirm === 'yes') leave();
+});
+
+function openMenu() {
+  syncSoundLabel();
+  dlg.menu.showModal();
+}
+
+// ---------- タイトル ----------
 function renderTitle() {
-  stopTimer();
-  const params = new URLSearchParams(location.search);
-  const roomFromUrl = normalizeCode(params.get('room'));
+  document.body.dataset.screen = 'title';
+  const roomFromUrl = normalizeCode(new URLSearchParams(location.search).get('room'));
+  const saved = storage('cc-name') || '';
   app.innerHTML = `
-  <main class="title-screen">
-    <header class="sign">
-      <p class="world">クラウン・セレスティア</p>
-      <h1>酒場のツケ</h1>
-      <p class="inn">天空の都の酒場「酔いどれ竜亭」。満席の卓に座った者が、全員分を払う。</p>
-    </header>
-    <section class="panel stack">
-      <label>あなたの名前
-        <input type="text" id="name" maxlength="16" placeholder="例：見習い騎士のミカド" value="${esc(savedName())}">
-      </label>
-    </section>
-    <section class="panel">
-      <h2>部屋に入る</h2>
-      <div class="row">
-        <input type="text" id="code" maxlength="5" placeholder="5文字の部屋コード" autocapitalize="characters" value="${esc(roomFromUrl)}">
-        <button class="btn" id="join">入る</button>
+  <main class="title">
+    <div class="crest" aria-hidden="true">
+      <span class="star s1"></span><span class="star s2"></span><span class="star s3"></span>
+      ${ICON.crown}
+    </div>
+    <p class="series">クラウン・セレスティア</p>
+    <h1>酒場のツケ</h1>
+    <p class="tagline">満席の卓に座った者が、全員分を払う。</p>
+    <div class="title-form">
+      <input type="text" id="name" maxlength="12" placeholder="あなたの名前" value="${esc(saved)}" aria-label="あなたの名前">
+      ${roomFromUrl ? '' : '<button class="btn wide" id="host">部屋を作って友達を招く</button>'}
+      <div class="join">
+        <input type="text" id="code" maxlength="5" placeholder="部屋コード" autocapitalize="characters" value="${esc(roomFromUrl)}" aria-label="部屋コード">
+        <button class="btn ${roomFromUrl ? '' : 'ghost'}" id="join">入る</button>
       </div>
-    </section>
-    <section class="panel">
-      <h2>部屋を作る</h2>
-      <div class="row">
-        <button class="btn" id="host">友達を招く部屋を作る</button>
-        <button class="btn ghost" id="solo">CPUと練習する</button>
-      </div>
-      <p class="hint">部屋を作ると、友達に送る招待リンクが出ます。足りない席はCPUで埋められます。</p>
-    </section>
-    <p class="hint"><button class="linklike" id="rulesBtn">遊び方を読む</button></p>
+      ${roomFromUrl ? '' : '<button class="btn ghost wide" id="solo">CPUと練習する</button>'}
+      <button class="linklike" id="rulesBtn">遊び方</button>
+    </div>
   </main>`;
-  const nameInput = app.querySelector('#name');
   const getName = () => {
-    const name = nameInput.value.trim().slice(0, 16) || '名無しの冒険者';
+    const name = $('#name').value.trim().slice(0, 12) || '名無しの冒険者';
     storage('cc-name', name);
     return name;
   };
-  app.querySelector('#rulesBtn').onclick = () => rulesEl.showModal();
-  app.querySelector('#solo').onclick = () => startHost(getName(), false);
-  app.querySelector('#host').onclick = (e) => {
-    e.target.disabled = true;
-    e.target.textContent = '部屋を準備中…';
+  $('#rulesBtn').onclick = () => dlg.rules.showModal();
+  $('#solo')?.addEventListener('click', () => startHost(getName(), false));
+  $('#host')?.addEventListener('click', (e) => {
+    e.currentTarget.disabled = true;
+    e.currentTarget.textContent = '部屋を準備しています…';
     startHost(getName(), true).catch((err) => {
-      toast(err.message);
       renderTitle();
+      toast(err.message);
     });
-  };
-  const join = (e) => {
-    const code = normalizeCode(app.querySelector('#code').value);
+  });
+  const join = () => {
+    const code = normalizeCode($('#code').value);
     if (code.length !== 5) return toast('部屋コードは5文字です');
-    e.target.disabled = true;
-    e.target.textContent = '接続中…';
+    const btn = $('#join');
+    btn.disabled = true;
+    btn.textContent = '接続中…';
     startClient(getName(), code).catch((err) => {
-      toast(err.message);
       renderTitle();
+      toast(err.message);
     });
   };
-  app.querySelector('#join').onclick = join;
-  app.querySelector('#code').onkeydown = (e) => e.key === 'Enter' && join({ target: app.querySelector('#join') });
-  if (roomFromUrl) app.querySelector(savedName() ? '#join' : '#name').focus();
+  $('#join').onclick = join;
+  $('#code').onkeydown = (e) => e.key === 'Enter' && join();
+  if (roomFromUrl && !saved) $('#name').focus();
 }
 
 async function startHost(name, online) {
@@ -186,8 +202,8 @@ async function startHost(name, online) {
   let host = null;
   if (online) {
     net = await hostRoom({
-      onMessage: (connId, msg) => host.handleMessage(connId, msg),
-      onDisconnect: (connId) => host.handleDisconnect(connId),
+      onMessage: (connId, msg) => host?.handleMessage(connId, msg),
+      onDisconnect: (connId) => host?.handleDisconnect(connId),
       onError: () => {},
     });
   }
@@ -198,18 +214,16 @@ async function startHost(name, online) {
     onView: onMessage,
   });
   session = { role: online ? 'host' : 'solo', host, net };
-  if (!online) {
-    host.addCpu();
-    host.addCpu();
-    host.addCpu();
-  }
+  if (!online) for (let i = 0; i < 3; i++) host.addCpu();
   host.broadcast();
 }
 
 async function startClient(name, code) {
   const net = await joinRoom(code, {
     onMessage,
-    onClose: () => leave('ホストとの接続が切れました'),
+    onClose: () => {
+      if (session?.net === net) leave('ホストとの接続が切れました');
+    },
   });
   session = { role: 'client', net };
   net.send({ type: 'join', name });
@@ -217,251 +231,495 @@ async function startClient(name, code) {
 
 // ---------- ロビー ----------
 function renderLobby() {
-  stopTimer();
+  document.body.dataset.screen = 'lobby';
   const isHost = session?.role !== 'client';
   const n = lobby.players.length;
   const invite = lobby.code ? `${location.origin}${location.pathname}?room=${lobby.code}` : '';
+  const seats = Array.from({ length: MAX_PLAYERS }, (_, i) => {
+    const p = lobby.players[i];
+    if (!p) {
+      return isHost
+        ? `<button class="seat-card empty add" data-add aria-label="CPUを呼ぶ"><span class="plus">＋</span><span>CPUを呼ぶ</span></button>`
+        : `<div class="seat-card empty"><span>空席</span></div>`;
+    }
+    const tags = [p.id === lobby.hostId ? 'ホスト' : '', p.isCpu ? 'CPU' : '', p.id === lobby.you ? 'あなた' : ''].filter(Boolean).join('・');
+    return `<div class="seat-card${p.id === lobby.you ? ' me' : ''}" style="--c:${SEAT_COLORS[i]}">
+      <span class="avatar">${esc(initial(p.name))}</span>
+      <span class="seat-name">${esc(p.name)}</span>
+      <span class="seat-tag">${tags}</span>
+      ${isHost && p.id !== lobby.hostId ? `<button class="seat-remove" data-remove="${esc(p.id)}" aria-label="${esc(p.name)}を外す">${ICON.close}</button>` : ''}
+    </div>`;
+  }).join('');
   app.innerHTML = `
   <main class="lobby">
-    <header class="sign">
-      <p class="world">クラウン・セレスティア</p>
+    <header class="lobby-head">
+      <p class="series">クラウン・セレスティア</p>
       <h1>酒場のツケ</h1>
     </header>
     ${lobby.code ? `
-    <section class="panel">
-      <h2>部屋コード</h2>
-      <p class="code">${esc(lobby.code)}</p>
-      <div class="row">
-        <input type="text" readonly value="${esc(invite)}" id="invite" aria-label="招待リンク">
-        <button class="btn small" id="copy">リンクをコピー</button>
-      </div>
-      <p class="hint">このリンクを友達に送ると、同じ部屋に入れます。</p>
-    </section>` : ''}
-    <section class="panel">
-      <h2>集まった冒険者（${n}/${MAX_PLAYERS}人）</h2>
-      <ul class="guests">
-        ${lobby.players.map((p) => `
-          <li>
-            <span>${esc(p.name)} ${p.id === lobby.hostId ? '<span class="tag">ホスト</span>' : ''}${p.isCpu ? '<span class="tag">CPU</span>' : ''}${p.id === lobby.you ? '<span class="tag">あなた</span>' : ''}</span>
-            ${isHost && p.id !== lobby.hostId ? `<button class="btn ghost small" data-remove="${esc(p.id)}">外す</button>` : ''}
-          </li>`).join('')}
-      </ul>
-      ${isHost ? `
-      <div class="row" style="margin-top:16px">
-        <button class="btn ghost" id="addCpu" ${n >= MAX_PLAYERS ? 'disabled' : ''}>CPUを呼ぶ</button>
-        <button class="btn" id="start" ${n < MIN_PLAYERS ? 'disabled' : ''}>開店する</button>
-      </div>
-      <p class="hint">${n < MIN_PLAYERS ? `あと${MIN_PLAYERS - n}人そろうと始められます。` : `${n}人なら格1〜${n * 10 + 5}の冒険者で${n === 2 ? 4 : 3}晩遊びます。`}</p>`
-      : '<p class="hint">ホストが開店するのを待っています。</p>'}
-    </section>
-    <p class="hint"><button class="linklike" id="rulesBtn">遊び方を読む</button>　<button class="linklike" id="leave">タイトルに戻る</button></p>
+    <section class="room">
+      <span class="room-label">部屋コード</span>
+      <span class="code">${esc(lobby.code)}</span>
+      <button class="btn small" id="copy">招待リンクをコピー</button>
+    </section>` : '<p class="solo-note">CPUと練習（席をタップしてCPUを増減）</p>'}
+    <section class="seats-grid">${seats}</section>
+    <p class="lobby-hint">${isHost
+      ? n < MIN_PLAYERS ? `あと${MIN_PLAYERS - n}人で開店できます` : `${n}人・格1〜${n * HAND_SIZE + 5}の冒険者で${n === 2 ? 4 : 3}晩`
+      : 'ホストの開店を待っています'}</p>
+    <footer class="lobby-foot">
+      <button class="btn ghost" id="leave">退出</button>
+      ${isHost ? `<button class="btn" id="start" ${n < MIN_PLAYERS ? 'disabled' : ''}>開店する</button>` : '<button class="btn ghost" id="rulesBtn">遊び方</button>'}
+    </footer>
   </main>`;
-  app.querySelector('#rulesBtn').onclick = () => rulesEl.showModal();
-  app.querySelector('#leave').onclick = () => leave();
-  app.querySelector('#copy')?.addEventListener('click', async () => {
+  $('#leave').onclick = askLeave;
+  $('#rulesBtn')?.addEventListener('click', () => dlg.rules.showModal());
+  $('#copy')?.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(invite);
       toast('招待リンクをコピーしました');
     } catch {
-      app.querySelector('#invite').select();
+      prompt('このリンクを友達に送ってください', invite);
     }
   });
-  app.querySelector('#addCpu')?.addEventListener('click', () => act({ type: 'addCpu' }));
-  app.querySelector('#start')?.addEventListener('click', () => act({ type: 'start' }));
-  app.querySelectorAll('[data-remove]').forEach((b) => (b.onclick = () => act({ type: 'remove', id: b.dataset.remove })));
+  $$('[data-add]').forEach((b) => (b.onclick = () => act({ type: 'addCpu' })));
+  $$('[data-remove]').forEach((b) => (b.onclick = () => act({ type: 'remove', id: b.dataset.remove })));
+  $('#start')?.addEventListener('click', () => {
+    sfx.open();
+    act({ type: 'start' });
+  });
 }
 
-// ---------- 対局 ----------
-function onState(next) {
-  view = next;
-  deadlineAt = next.deadlineIn != null ? performance.now() + next.deadlineIn : null;
-  const res = next.resolution;
-  if (res && res.seq > anim.seq) {
-    anim.seq = res.seq;
-    playResolution(res);
-    return;
-  }
-  if (!anim.running) renderGame();
-}
-
-function playResolution(res) {
-  anim.running = true;
-  anim.tables = res.startTables.map((t) => [...t]);
-  anim.plays = res.plays;
-  anim.done = 0;
-  anim.burst = null;
-  anim.fresh = null;
-  renderGame();
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const step = reduce ? 250 : TIMING.stepMs;
-  let i = 0;
-  const next = () => {
-    if (anim.seq !== res.seq) return; // 新しい状態に追い越された
-    if (i >= res.events.length) {
-      anim.running = false;
-      anim.burst = null;
-      renderGame();
-      return;
-    }
-    const e = res.events[i++];
-    anim.done = i;
-    if (e.type === 'seat') {
-      anim.tables[e.table].push(e.rank);
-      anim.burst = null;
-    } else {
-      anim.tables[e.table] = [e.rank];
-      const who = e.pid === view.you ? 'あなた' : nameOf(e.pid);
-      anim.burst = { table: e.table, text: `${who}がツケ${e.amount}枚` };
-    }
-    anim.fresh = { table: e.table, rank: e.rank };
-    renderGame();
-    setTimeout(next, step);
-  };
-  setTimeout(next, reduce ? 300 : TIMING.revealMs);
-}
-
-function stopTimer() {
-  clearInterval(timerHandle);
-  timerHandle = null;
-}
-
-function updateTimer() {
-  const els = app.querySelectorAll('.js-timer');
-  for (const el of els) {
-    if (deadlineAt == null || !view || anim.running) {
-      el.textContent = '';
-      continue;
-    }
-    const secs = Math.max(0, Math.ceil((deadlineAt - performance.now()) / 1000));
-    el.textContent = view.phase === 'roundEnd' ? `次の晩まで${secs}秒` : `残り${secs}秒`;
-    el.classList.toggle('low', secs <= 5 && view.phase !== 'roundEnd');
-  }
-}
-
-function tableHtml(table, i, { pickable }) {
-  const bill = table.reduce((s, r) => s + tabFor(r), 0);
-  const full = table.length >= SEAT_LIMIT;
-  const burst = anim.running && anim.burst?.table === i ? anim.burst : null;
-  const cards = table
-    .map((r) => cardHtml(r, { cls: anim.running && anim.fresh?.table === i && anim.fresh.rank === r ? 'new' : '' }))
-    .join('');
-  const empty = '<div class="seat"></div>'.repeat(Math.max(0, SEAT_LIMIT - table.length));
-  return `
-  <section class="table ${full ? 'danger' : ''} ${pickable ? 'pickable' : ''} ${burst ? 'flash' : ''}" data-table="${i}" ${pickable ? 'role="button" tabindex="0"' : ''} aria-label="${TABLE_NAMES[i]}、${table.length}人、勘定${bill}">
-    <div class="table-head"><span class="name">${TABLE_NAMES[i]}</span><span class="bill">勘定 ${bill}</span></div>
-    <div class="seats">${cards}${empty}<div class="seat sixth">6人目が<br>全員分</div></div>
-    ${burst ? `<span class="burst">${esc(burst.text)}</span>` : ''}
-  </section>`;
-}
-
-function statusOf(p) {
-  if (!view) return '';
-  if (anim.running) return '';
-  if (view.phase === 'choosing') return p.played ? '<span class="state ok">決めた</span>' : '<span class="state">考え中</span>';
-  if (view.phase === 'choosingTable' && view.awaiting === p.id) return '<span class="state">卓を選び中</span>';
-  return '';
-}
-
-function renderGame() {
-  if (!view) return;
-  const v = view;
-  const tables = anim.running ? anim.tables : v.tables;
-  const plays = anim.running ? anim.plays : v.revealed;
-  const mustPick = !anim.running && v.phase === 'choosingTable' && v.awaiting === v.you;
-  const canPlay = !anim.running && v.phase === 'choosing';
-
-  let prompt = '';
-  if (anim.running) prompt = '冒険者たちが格の低い順に席へ向かいます…';
-  else if (mustPick) prompt = `あなたの格${plays[0].rank}は相席を断られました。勘定を肩代わりする卓を選んでください。`;
-  else if (v.phase === 'choosingTable') prompt = `${esc(nameOf(v.awaiting))}が、勘定を肩代わりする卓を選んでいます。`;
-  else if (canPlay) prompt = v.myPlay != null ? `格${v.myPlay}を案内しました。全員がそろうまで選び直せます。` : '酒場に案内する冒険者を1人選んでください。';
-
-  const revealHtml = plays
-    ? `<div class="reveal">${plays
-        .map((p, idx) => `<div class="${anim.running && idx < anim.done ? 'done' : ''}">${cardHtml(p.rank)}<div class="who">${esc(p.pid === v.you ? 'あなた' : nameOf(p.pid))}</div></div>`)
-        .join('')}</div>`
-    : '';
-
-  const me = v.players.find((p) => p.id === v.you);
+// ---------- 対局画面 ----------
+function mountGame() {
+  document.body.dataset.screen = 'game';
   app.innerHTML = `
   <main class="game">
     <header class="bar">
-      <span class="where">酔いどれ竜亭</span>
-      <span class="night">第${v.round}晩／${v.rounds}晩　手番 ${Math.min(v.turn, 10)}/10</span>
-      <span class="timer js-timer"></span>
-      <button class="btn ghost small" id="rulesBtn">遊び方</button>
+      <button class="icon-btn" id="menuBtn" aria-label="メニュー">${ICON.menu}</button>
+      <div class="night" id="night"></div>
+      <div class="clock" id="clock" aria-live="off">
+        <svg viewBox="0 0 40 40" aria-hidden="true"><circle class="track" cx="20" cy="20" r="16"/><circle class="ring" cx="20" cy="20" r="16" pathLength="100"/></svg>
+        <span id="clockText"></span>
+      </div>
     </header>
-    <section class="floor">
-      <p class="drinkers">今夜の大酒飲み：<b>格${v.heavy.join('</b>と<b>格')}</b>（ツケ${HEAVY_TAB}）</p>
-      ${tables.map((t, i) => tableHtml(t, i, { pickable: mustPick })).join('')}
-      ${prompt && !canPlay ? `<p class="prompt">${prompt}</p>` : ''}
-      ${revealHtml}
+    <ul class="patrons" id="patrons"></ul>
+    <section class="tables" id="tables">
+      ${TABLE_NAMES.map((name, i) => `
+        <div class="table" data-table="${i}" aria-label="${name}">
+          <div class="t-label">${TABLE_ICONS[i]}<span class="bill"></span></div>
+          <div class="seats"></div>
+          <span class="caption"></span>
+        </div>`).join('')}
     </section>
-    <aside class="board">
-      <h2>ツケの黒板</h2>
-      <ul class="patrons">
-        ${v.players.map((p) => `
-          <li class="patron ${p.id === v.you ? 'me' : ''}">
-            <div class="line"><span class="pname">${esc(p.name)}</span>${statusOf(p)}<span class="sum">${p.debt}</span></div>
-            ${tallyHtml(p.debt)}
-          </li>`).join('')}
-      </ul>
-      <ul class="log">${v.log.slice().reverse().map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
-    </aside>
-    <section class="hand-area">
-      ${canPlay ? `<p class="prompt">${prompt}</p>` : ''}
-      <div class="hand">
-        ${v.hand.length
-          ? v.hand.map((r) => cardHtml(r, { tag: 'button', cls: r === v.myPlay ? 'chosen' : '', attrs: `data-rank="${r}" ${canPlay ? '' : 'disabled'}` })).join('')
-          : '<p class="hand-empty">手札はありません。</p>'}
-      </div>
+    <p class="prompt" id="prompt"></p>
+    <section class="tray" id="tray">
+      <div class="hand" id="hand"></div>
+      <div class="stage" id="stage"></div>
     </section>
-  </main>
-  ${!anim.running && (v.phase === 'roundEnd' || v.phase === 'gameEnd') ? ledgerHtml(v, me) : ''}`;
+    <div class="banner" id="banner"><span class="b-main"></span><span class="b-sub"></span></div>
+    <div class="ledger-wrap" id="ledger"></div>
+  </main>`;
+  $('#menuBtn').onclick = openMenu;
+  $('#tables').addEventListener('click', (e) => {
+    const t = e.target.closest('.table.pickable');
+    if (!t) return;
+    $$('.table.pickable').forEach((x) => x.classList.remove('pickable'));
+    sfx.pick();
+    act({ type: 'chooseTable', index: Number(t.dataset.table) });
+  });
+  $('#hand').addEventListener('click', (e) => {
+    const c = e.target.closest('.card');
+    if (!c || c.disabled) return;
+    $$('#hand .card').forEach((x) => x.classList.toggle('chosen', x === c));
+    sfx.pick();
+    act({ type: 'play', rank: Number(c.dataset.rank) });
+  });
+}
 
-  app.querySelector('#rulesBtn').onclick = () => rulesEl.showModal();
-  app.querySelectorAll('.hand .card').forEach((b) => (b.onclick = () => act({ type: 'play', rank: Number(b.dataset.rank) })));
-  if (mustPick) {
-    app.querySelectorAll('.table.pickable').forEach((t) => {
-      const pick = () => act({ type: 'chooseTable', index: Number(t.dataset.table) });
-      t.onclick = pick;
-      t.onkeydown = (e) => (e.key === 'Enter' || e.key === ' ') && pick();
-    });
+function onState(next) {
+  view = next;
+  deadlineAt = next.deadlineIn != null ? performance.now() + next.deadlineIn : null;
+  deadlineTotal =
+    next.phase === 'choosing' ? TIMING.chooseMs : next.phase === 'choosingTable' ? TIMING.tableMs + TIMING.revealMs : TIMING.roundBreakMs;
+  if (!$('.game')) mountGame();
+  const res = next.resolution;
+  if (res && res.seq > anim.seq) {
+    anim.seq = res.seq;
+    runResolution(res);
+    return;
   }
-  app.querySelector('#again')?.addEventListener('click', () => act({ type: 'restart' }));
-  app.querySelector('#leaveGame')?.addEventListener('click', () => leave());
-  if (!timerHandle) timerHandle = setInterval(updateTimer, 250);
-  updateTimer();
+  if (!anim.running) updateGame();
 }
 
-function ledgerHtml(v, me) {
-  const final = v.phase === 'gameEnd';
-  const winners = v.ranking.filter((r) => r.place === 1).map((r) => (r.id === v.you ? 'あなた' : r.name));
-  const nights = Array.from({ length: v.round }, (_, i) => `<th>${i + 1}晩</th>`).join('');
-  return `
-  <div class="overlay">
-    <section class="ledger" role="dialog" aria-label="${final ? '大会の結果' : `第${v.round}晩の勘定`}">
-      <h2>${final ? `優勝は${esc(winners.join('と'))}` : `第${v.round}晩の勘定`}</h2>
-      <p class="hint">${final ? 'ツケが一番少なかった者が、天上の王冠に一歩近づきました。' : `酔いつぶれて寝ていたのは格${v.lastSleeper}でした。`}</p>
-      <table>
-        <thead><tr><th>順位</th><th>冒険者</th>${nights}<th>合計</th></tr></thead>
-        <tbody>
-          ${v.ranking.map((r) => `
-            <tr class="${r.place === 1 ? 'top' : ''}">
-              <td>${r.place}</td><td>${esc(r.name)}${r.id === v.you ? '（あなた）' : ''}</td>
-              ${r.roundDebts.map((d) => `<td>${d}</td>`).join('')}<td>${r.debt}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-      <div class="actions">
-        ${final
-          ? v.isHost
-            ? '<button class="btn ghost" id="leaveGame">店を閉める</button><button class="btn" id="again">もう一度遊ぶ</button>'
-            : '<button class="btn ghost" id="leaveGame">店を出る</button><span class="hint">ホストの合図を待っています</span>'
-          : '<span class="hint js-timer"></span>'}
-      </div>
-    </section>
-  </div>`;
+function setPrompt(text, tone = '') {
+  const el = $('#prompt');
+  el.textContent = text;
+  el.dataset.tone = tone;
 }
+
+function updateBar() {
+  const v = view;
+  const nights = Array.from({ length: v.rounds }, (_, i) => `<i class="${i < v.round ? 'lit' : ''}"></i>`).join('');
+  $('#night').innerHTML = `<span class="pips" aria-label="第${v.round}晩／全${v.rounds}晩">${nights}</span><span>第${v.round}晩</span><span class="turn">${Math.min(v.turn, HAND_SIZE)}／${HAND_SIZE}杯目</span>`;
+}
+
+function patronState(p) {
+  if (anim.running) return '';
+  if (view.phase === 'choosing') return p.played ? '<span class="pstate ready" title="決めた"></span>' : '<span class="pstate think" title="考え中"><i></i><i></i><i></i></span>';
+  if (view.phase === 'choosingTable' && view.awaiting === p.id) return '<span class="pstate pick">卓選び</span>';
+  return '';
+}
+
+function updatePatrons(debts = null) {
+  const list = $('#patrons');
+  list.style.setProperty('--n', view.players.length);
+  list.innerHTML = view.players
+    .map((p, i) => `
+      <li class="patron${p.id === view.you ? ' me' : ''}" data-pid="${esc(p.id)}" style="--c:${SEAT_COLORS[i]}">
+        <span class="avatar">${esc(initial(p.name))}${patronState(p)}</span>
+        <span class="pdebt">${debts ? debts[p.id] : p.debt}</span>
+        <span class="pname">${esc(p.id === view.you ? 'あなた' : p.name)}</span>
+      </li>`)
+    .join('');
+}
+
+function tableEl(i) {
+  return $(`.table[data-table="${i}"]`);
+}
+
+function slotEl(i, index) {
+  return tableEl(i).querySelectorAll('.seats > *')[index];
+}
+
+function drawTable(i, cards, fresh = null) {
+  const el = tableEl(i);
+  const slots = [];
+  for (let s = 0; s < SEAT_LIMIT; s++) {
+    slots.push(cards[s] != null ? cardHtml(view, cards[s], { cls: cards[s] === fresh ? 'land' : '' }) : '<div class="slot"></div>');
+  }
+  slots.push('<div class="slot sixth"><span>満席</span></div>');
+  el.querySelector('.seats').innerHTML = slots.join('');
+  el.querySelector('.bill').textContent = cards.reduce((s, r) => s + tabOf(view, r), 0);
+  el.classList.toggle('danger', cards.length >= SEAT_LIMIT);
+}
+
+function drawTables(tables) {
+  tables.forEach((t, i) => drawTable(i, t));
+}
+
+// 手札と公開台のカードを、台の空きに合わせて最大の大きさにする
+function trayRoom() {
+  const tray = $('#tray');
+  return { W: tray.clientWidth - 8, H: tray.clientHeight - 8, base: $('.slot')?.offsetWidth || 48 };
+}
+
+function layoutHand() {
+  const hand = $('#hand');
+  if (!hand || !$('#tray')) return;
+  const n = hand.children.length;
+  hand.classList.remove('rows2', 'fan');
+  if (!n) return;
+  const { W, H, base } = trayRoom();
+  const gap = 6;
+  const one = Math.min((W - (n - 1) * gap) / n, (H - 18) / 1.38, 88);
+  const cols = Math.ceil(n / 2);
+  const two = Math.min((W - (cols - 1) * gap) / cols, (H - 18 - gap) / 2 / 1.38, 88);
+  let w;
+  if (one >= base * 1.1 || n <= 5) {
+    w = one;
+  } else if (two >= base * 1.1) {
+    w = two;
+    hand.classList.add('rows2');
+    hand.style.setProperty('--cols', cols);
+  } else {
+    // 縦が足りない画面では重ねて並べる
+    w = Math.min((H - 18) / 1.38, base * 1.25, 88);
+    hand.classList.add('fan');
+    hand.style.setProperty('--step', `${(W - n * w) / (n - 1)}px`);
+  }
+  hand.style.setProperty('--hw-live', `${Math.floor(w)}px`);
+}
+
+function layoutStage() {
+  const stage = $('#stage');
+  const n = stage?.children.length;
+  if (!n) return;
+  const { W, H } = trayRoom();
+  const w = Math.min((W - (n - 1) * 6) / n, (H - 30) / 1.38, 84);
+  stage.style.setProperty('--hw-live', `${Math.floor(w)}px`);
+}
+
+addEventListener('resize', () => {
+  layoutHand();
+  layoutStage();
+});
+
+function drawHand() {
+  const v = view;
+  const tray = $('#tray');
+  tray.dataset.mode = 'hand';
+  const canPlay = v.phase === 'choosing' && !anim.running;
+  const hand = $('#hand');
+  hand.classList.toggle('waiting', canPlay && v.myPlay == null);
+  hand.innerHTML = v.hand.map((r) => cardHtml(v, r, { tag: 'button', cls: r === v.myPlay ? 'chosen' : '', attrs: canPlay ? '' : 'disabled' })).join('');
+  layoutHand();
+}
+
+function drawStage(plays, faceUp) {
+  $('#tray').dataset.mode = 'stage';
+  $('#stage').innerHTML = plays
+    .map((p) => `<div class="reveal-item" data-pid="${esc(p.pid)}">${flipHtml(view, p.rank, faceUp)}<span class="who">${esc(nameOf(p.pid))}</span></div>`)
+    .join('');
+  layoutStage();
+}
+
+async function flipStage() {
+  const items = $$('#stage .flip');
+  for (const f of items) {
+    f.classList.add('up');
+    sfx.flip();
+    await sleep(reduceMotion.matches ? 0 : 90);
+  }
+}
+
+function showBanner(main, sub = '') {
+  const b = $('#banner');
+  b.querySelector('.b-main').textContent = main;
+  b.querySelector('.b-sub').textContent = sub;
+  b.classList.remove('show');
+  void b.offsetWidth;
+  b.classList.add('show');
+}
+
+function updateGame() {
+  const v = view;
+  updateBar();
+  updatePatrons();
+  drawTables(v.tables);
+  $$('.table').forEach((t) => t.classList.toggle('pickable', v.phase === 'choosingTable' && v.awaiting === v.you));
+
+  if (v.phase === 'choosing' && v.round !== shownRound) {
+    shownRound = v.round;
+    showBanner(`第${v.round}晩 開店`, `今夜の大酒飲み　格${v.heavy.join('・格')}`);
+    sfx.open();
+  }
+
+  if (v.phase === 'choosingTable') {
+    const key = `${v.round}-${v.turn}`;
+    if (anim.flippedKey !== key) {
+      anim.flippedKey = key;
+      drawStage(v.revealed, false);
+      flipStage();
+    } else {
+      drawStage(v.revealed, true);
+    }
+    if (v.awaiting === v.you) {
+      setPrompt('相席お断り！ 勘定を肩代わりする卓を選んで', 'alert');
+      sfx.alarm();
+    } else {
+      setPrompt(`${nameOf(v.awaiting)}が肩代わりする卓を選んでいます`);
+    }
+  } else {
+    drawHand();
+    if (v.phase === 'choosing') {
+      if (v.myPlay == null) setPrompt('酒場へ案内する冒険者を1人選ぼう', 'go');
+      else setPrompt(`格${v.myPlay}を案内中（全員そろうまで変更できます）`);
+    } else {
+      setPrompt('');
+    }
+  }
+  renderLedger();
+  updateClock();
+}
+
+// ---------- 着席の演出 ----------
+function fly(el, target, ms, { scale = null, fade = false } = {}) {
+  const a = el.getBoundingClientRect();
+  const b = target.getBoundingClientRect();
+  const ghost = el.cloneNode(true);
+  ghost.classList.add('flyer');
+  Object.assign(ghost.style, { left: `${a.left}px`, top: `${a.top}px`, width: `${a.width}px`, height: `${a.height}px` });
+  document.body.appendChild(ghost);
+  el.style.visibility = 'hidden';
+  const s = scale ?? b.width / a.width;
+  const dx = b.left + b.width / 2 - (a.left + a.width / 2);
+  const dy = b.top + b.height / 2 - (a.top + a.height / 2);
+  const run = ghost.animate(
+    [
+      { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+      { transform: `translate(${dx * 0.5}px, ${dy * 0.5 - 24}px) scale(${(1 + s) / 2 + 0.08})`, opacity: 1, offset: 0.5 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${s})`, opacity: fade ? 0 : 1 },
+    ],
+    { duration: reduceMotion.matches ? 1 : ms, easing: 'cubic-bezier(.35,.6,.25,1)', fill: 'forwards' },
+  );
+  return run.finished.catch(() => {}).then(() => ghost.remove());
+}
+
+function floatText(target, text) {
+  const r = target.getBoundingClientRect();
+  const f = document.createElement('span');
+  f.className = 'float';
+  f.textContent = text;
+  Object.assign(f.style, { left: `${r.left + r.width / 2}px`, top: `${r.top + 6}px` });
+  document.body.appendChild(f);
+  setTimeout(() => f.remove(), 1400);
+}
+
+async function runResolution(res) {
+  const token = ++anim.token;
+  anim.running = true;
+  const T = TIMING;
+  const start = performance.now();
+  const alive = () => token === anim.token && $('.game');
+  const until = (ms) => sleep(start + ms - performance.now());
+
+  $('#ledger').innerHTML = '';
+  const paid = {};
+  for (const e of res.events) if (e.amount) paid[e.pid] = (paid[e.pid] ?? 0) + e.amount;
+  const debts = Object.fromEntries(view.players.map((p) => [p.id, p.debt - (paid[p.id] ?? 0)]));
+  updateBar();
+  updatePatrons(debts);
+  const tables = res.startTables.map((t) => [...t]);
+  drawTables(tables);
+  $$('.table').forEach((t) => t.classList.remove('pickable'));
+  setPrompt('格の低い順に着席します');
+
+  const key = `${res.round}-${res.turn}`;
+  if (anim.flippedKey !== key) {
+    anim.flippedKey = key;
+    drawStage(res.plays, false);
+    await sleep(120);
+    await flipStage();
+  } else {
+    drawStage(res.plays, true);
+  }
+  let budget = T.revealMs;
+  await until(budget);
+
+  const items = $$('#stage .reveal-item');
+  for (let i = 0; i < res.events.length; i++) {
+    if (!alive()) return;
+    const e = res.events[i];
+    const card = items[i].querySelector('.flip');
+    items[i].classList.add('going');
+    if (e.type === 'seat') {
+      await fly(card, slotEl(e.table, tables[e.table].length), T.stepMs * 0.75);
+      if (!alive()) return;
+      tables[e.table].push(e.rank);
+      drawTable(e.table, tables[e.table], e.rank);
+      sfx.seat();
+      budget += T.stepMs;
+    } else {
+      const row = tableEl(e.table);
+      row.classList.add(e.type === 'full' ? 'is-full' : 'is-refused');
+      row.querySelector('.caption').textContent = e.type === 'full' ? `${nameOf(e.pid)}が6人目！ 満席` : `${nameOf(e.pid)}は相席お断り！`;
+      sfx.alarm();
+      await sleep(T.takeMs * 0.28);
+      if (!alive()) return;
+      // 卓の客が勘定を持って払う人のもとへ
+      const chip = $(`.patron[data-pid="${CSS.escape(e.pid)}"]`);
+      const seated = [...row.querySelectorAll('.seats .card')];
+      await Promise.all(
+        seated.map((c, k) => sleep(k * 50).then(() => fly(c, chip.querySelector('.avatar'), T.takeMs * 0.3, { scale: 0.3, fade: true }))),
+      );
+      if (!alive()) return;
+      sfx.coins();
+      debts[e.pid] += e.amount;
+      updatePatrons(debts);
+      const chipNow = $(`.patron[data-pid="${CSS.escape(e.pid)}"]`);
+      chipNow.classList.add('hit');
+      floatText(chipNow, `ツケ +${e.amount}`);
+      tables[e.table] = [];
+      drawTable(e.table, []);
+      await sleep(T.takeMs * 0.08);
+      await fly(card, slotEl(e.table, 0), T.takeMs * 0.18);
+      if (!alive()) return;
+      tables[e.table] = [e.rank];
+      drawTable(e.table, tables[e.table], e.rank);
+      sfx.seat();
+      budget += T.takeMs;
+      await until(budget - 120);
+      row.classList.remove('is-full', 'is-refused');
+      row.querySelector('.caption').textContent = '';
+    }
+    await until(budget);
+  }
+  await until(budget + 300);
+  if (!alive()) return;
+  anim.running = false;
+  updateGame();
+}
+
+// ---------- 晩の勘定・大会の結果 ----------
+function renderLedger() {
+  const v = view;
+  const wrap = $('#ledger');
+  if (v.phase !== 'roundEnd' && v.phase !== 'gameEnd') {
+    wrap.innerHTML = '';
+    ledgerShownFor = null;
+    return;
+  }
+  const key = `${v.phase}-${v.round}`;
+  if (ledgerShownFor === key) return;
+  ledgerShownFor = key;
+  const final = v.phase === 'gameEnd';
+  const winners = v.ranking.filter((r) => r.place === 1).map((r) => nameOf(r.id));
+  const idx = Object.fromEntries(v.players.map((p, i) => [p.id, i]));
+  if (final) sfx.fanfare();
+  wrap.innerHTML = `
+  <section class="ledger${final ? ' final' : ''}" role="dialog" aria-label="${final ? '大会の結果' : `第${v.round}晩の勘定`}">
+    ${final ? `<div class="ledger-crown">${ICON.crown}</div>` : ''}
+    <h2>${final ? `${esc(winners.join('と'))}の勝利` : `第${v.round}晩の勘定`}</h2>
+    <p class="ledger-sub">${final ? 'ツケが一番少ない者が、天上の王冠に近づいた' : `酔いつぶれて寝ていたのは格${v.lastSleeper}`}</p>
+    <ol class="ledger-list">
+      ${v.ranking.map((r) => `
+        <li class="${r.place === 1 ? 'top' : ''}${r.id === v.you ? ' me' : ''}" style="--c:${SEAT_COLORS[idx[r.id]]}">
+          <span class="place">${r.place}</span>
+          <span class="avatar">${esc(initial(r.name))}</span>
+          <span class="lname">${esc(nameOf(r.id))}</span>
+          ${tallyHtml(r.debt, { drawn: true })}
+          <span class="ltotal">${r.debt}${final ? '' : `<small>＋${r.roundDebts.at(-1) ?? 0}</small>`}</span>
+        </li>`).join('')}
+    </ol>
+    <div class="ledger-foot">
+      ${final
+        ? v.isHost
+          ? '<button class="btn ghost" id="endLeave">退出</button><button class="btn" id="again">もう一度遊ぶ</button>'
+          : '<button class="btn ghost" id="endLeave">退出</button><span class="wait">ホストの合図を待っています</span>'
+        : '<span class="wait js-next"></span>'}
+    </div>
+  </section>`;
+  $('#again')?.addEventListener('click', () => act({ type: 'restart' }));
+  $('#endLeave')?.addEventListener('click', askLeave);
+}
+
+// ---------- 時計 ----------
+function updateClock() {
+  const clock = $('#clock');
+  if (!clock || !view) return;
+  const ring = clock.querySelector('.ring');
+  const text = $('#clockText');
+  const active = deadlineAt != null && !anim.running && view.phase !== 'gameEnd';
+  clock.classList.toggle('off', !active);
+  const next = $('.js-next');
+  if (!active) {
+    text.textContent = '';
+    ring.style.strokeDashoffset = 0;
+    return;
+  }
+  const left = Math.max(0, deadlineAt - performance.now());
+  const secs = Math.ceil(left / 1000);
+  text.textContent = secs;
+  ring.style.strokeDashoffset = 100 - Math.min(100, (left / deadlineTotal) * 100);
+  const deciding =
+    (view.phase === 'choosing' && view.myPlay == null) || (view.phase === 'choosingTable' && view.awaiting === view.you);
+  clock.classList.toggle('low', deciding && secs <= 5);
+  if (next) next.textContent = `次の晩まで ${secs}秒`;
+  if (deciding && secs <= 5 && secs > 0 && lastTick !== secs) {
+    lastTick = secs;
+    sfx.tick();
+  }
+}
+setInterval(updateClock, 200);
 
 renderTitle();
