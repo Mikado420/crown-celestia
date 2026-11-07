@@ -10,16 +10,20 @@ const mg = (type) => ({ id: `m-${type}-0`, kind: 'magic', type });
 
 test('役の判定（強い順・合計・ワイルド・霧）', () => {
   const f = (cards, fog) => G.evaluate(cards, fog);
-  assert.deepEqual(f([sp(0, 3), sp(0, 4), sp(0, 5)]), { rank: 5, sum: 12 });
-  assert.equal(f([sp(0, 7), sp(1, 7), sp(2, 7)]).rank, 4);
+  // score ＝ 合計 ＋ 役ボーナス（連番1・同属性2・同数字2・同属性の連番3）
+  assert.deepEqual(f([sp(0, 3), sp(0, 4), sp(0, 5)]), { rank: 5, sum: 12, bonus: 3, score: 15 });
+  assert.deepEqual(f([sp(0, 7), sp(1, 7), sp(2, 7)]), { rank: 4, sum: 21, bonus: 2, score: 23 });
   assert.equal(f([sp(0, 1), sp(0, 4), sp(0, 9)]).rank, 3);
   assert.equal(f([sp(0, 1), sp(1, 2), sp(2, 3)]).rank, 2);
-  assert.equal(f([sp(0, 1), sp(1, 5), sp(2, 9)]).rank, 1);
-  assert.deepEqual(f([sp(0, 8), sp(0, 9), mg('rainbow')]), { rank: 5, sum: 27 }); // 8-9-10
-  assert.deepEqual(f([sp(2, 9), sp(2, 10), mg('greater')]), { rank: 5, sum: 27 });
+  assert.deepEqual(f([sp(0, 1), sp(1, 5), sp(2, 9)]), { rank: 1, sum: 15, bonus: 0, score: 15 });
+  assert.deepEqual(f([sp(0, 8), sp(0, 9), mg('rainbow')]), { rank: 5, sum: 27, bonus: 3, score: 30 }); // 8-9-10
+  assert.deepEqual(f([sp(2, 9), sp(2, 10), mg('greater')]), { rank: 5, sum: 27, bonus: 3, score: 30 });
   assert.equal(f([sp(1, 2), sp(4, 2), mg('lesser')]).rank, 4);
-  assert.deepEqual(f([sp(0, 1), sp(0, 2), sp(0, 3)], true), { rank: 0, sum: 6 });
-  assert.ok(G.beats({ rank: 3, sum: 6 }, { rank: 2, sum: 27 }));
+  assert.deepEqual(f([sp(0, 1), sp(0, 2), sp(0, 3)], true), { rank: 0, sum: 6, bonus: 0, score: 6 }); // 霧：ボーナスなし
+  // 役ボーナスより合計の差の方が大きければ、合計が高い方が勝つ
+  assert.ok(G.beats({ score: 20 }, { score: 19 }));
+  assert.ok(!G.beats({ score: 8 }, { score: 28 }));
+  assert.ok(G.beats(f([sp(0, 9), sp(1, 9), sp(2, 1)]), f([sp(0, 1), sp(0, 2), sp(0, 3)]))); // バラの19 ＞ 同属性連番の6＋3＝9
 });
 
 test('配置：2人は7つ、3人は三角形で9つ、4〜6人は輪で決闘ごとに2つ', () => {
@@ -42,9 +46,10 @@ function duel2() {
   return s;
 }
 
-test('同時に出し、両側がそろったら役を比べる。同じなら先にそろえた方', () => {
+test('同時に出し、両側がそろったら「合計＋役ボーナス」で比べる', () => {
   const s = duel2();
-  s.hands.p0 = ['s0-3', 's0-4', 's0-5', 's1-1'];
+  // p0：同属性の連番 8-9-10 → 27＋3＝30。p1：同じ数字の7 → 21＋2＝23
+  s.hands.p0 = ['s0-8', 's0-9', 's0-10', 's1-1'];
   s.hands.p1 = ['s2-7', 's3-7', 's4-7', 's1-2'];
   for (let i = 0; i < 3; i++) {
     G.submit(s, 'p0', { card: s.hands.p0[0], circle: 0 });
@@ -52,14 +57,16 @@ test('同時に出し、両側がそろったら役を比べる。同じなら�
   }
   const c = s.circles[0];
   assert.equal(c.decided, true);
-  assert.equal(c.owner, 'p0'); // 同じ属性の連番 > 同じ数字
+  assert.equal(c.owner, 'p0');
+  assert.equal(c.result.forms.p0.score, 30);
+  assert.equal(c.result.forms.p1.score, 23);
 });
 
 test('片側がそろって相手が逆転できなければ、その場で決着する', () => {
   const s = duel2();
-  // p1 が最強の 8-9-10 同属性の連番をそろえ、p0 は何もない
+  // p1 が 10・10・10 をそろえて32点。残りの精霊では、p0 がこれを超えられない
   s.hands.p0 = ['s1-1', 's1-2', 's1-3', 's2-1'];
-  s.hands.p1 = ['s0-8', 's0-9', 's0-10', 's2-2'];
+  s.hands.p1 = ['s0-10', 's1-10', 's2-10', 's2-2'];
   // 虹の精霊などは山から取り除いて、逆転の目を完全になくす
   s.magicDeck = s.magicDeck.filter((id) => !/rainbow|greater|lesser/.test(id));
   for (let i = 0; i < 3; i++) {

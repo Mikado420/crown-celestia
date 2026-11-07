@@ -1,6 +1,6 @@
 // 魔法陣の決闘（バトルライン風）— ゲームエンジン
 // 隣り合う2人の間ごとに魔法陣が並び、全員が同時に1枚ずつ精霊か秘術を出す。
-// 片側3体（陣の拡張なら4体）の役を比べて魔法陣を取り合う。
+// 片側3体（陣の拡張なら4体）の「合計＋役ボーナス」を比べて魔法陣を取り合う。
 
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 6;
@@ -14,7 +14,7 @@ export const MAGIC = {
   rainbow: { name: '虹の精霊', kind: 'spirit', text: '好きな属性・数字になる。自分の場に1体まで' },
   greater: { name: '上位精霊', kind: 'spirit', text: '数字8・好きな属性になる' },
   lesser: { name: '小精霊', kind: 'spirit', text: '数字1〜3・好きな属性になる' },
-  fog: { name: '霧の結界', kind: 'terrain', text: 'その魔法陣は、役を無視して合計で勝負する' },
+  fog: { name: '霧の結界', kind: 'terrain', text: 'その魔法陣は、役のボーナスを無視して合計だけで勝負する' },
   expand: { name: '陣の拡張', kind: 'terrain', text: 'その魔法陣は、片側4体ずつ必要になる' },
   scout: { name: '遠見の水晶', kind: 'instant', text: '精霊の山から2枚引く' },
   transfer: { name: '転移', kind: 'instant', text: '自分の未決着の精霊を1体、別の魔法陣へ移すか消す' },
@@ -24,7 +24,9 @@ export const MAGIC = {
 export const MAGIC_TYPES = Object.keys(MAGIC);
 
 export const FORMATIONS = ['', 'バラ', '連番', '同じ属性', '同じ数字', '同じ属性の連番'];
-export const FOG_NAME = '合計勝負';
+export const FOG_NAME = '合計のみ';
+// 役ボーナス（rank の添字）：バラ0・連番1・同じ属性2・同じ数字2・同じ属性の連番3
+export const BONUS = [0, 0, 1, 2, 2, 3];
 
 export const handSizeFor = (n) => (n === 2 ? 7 : n === 3 ? 6 : 5);
 export const elementCountFor = (n) => (n >= 5 ? 7 : 6);
@@ -68,11 +70,15 @@ function rankOf(els, nums) {
   return 1;
 }
 
-// 一番強くなる数字・属性を自動で選んで評価する。fog なら合計だけ（rank 0）。
+// 一番高くなる数字・属性を自動で選んで評価する。
+// score ＝ 合計 ＋ 役ボーナス。霧の結界の陣（fog）はボーナスなしで合計だけ（rank 0）。
 export function evaluate(cards, fog = false) {
   const fixed = cards.filter((c) => !isWild(c));
   const wilds = cards.filter(isWild);
-  if (fog) return { rank: 0, sum: cards.reduce((s, c) => s + cardMax(c), 0) };
+  if (fog) {
+    const sum = cards.reduce((s, c) => s + cardMax(c), 0);
+    return { rank: 0, sum, bonus: 0, score: sum };
+  }
   const fixedEls = [...new Set(fixed.map((c) => c.el))];
   const wildEl = fixedEls.length === 1 ? fixedEls[0] : fixedEls.length === 0 ? 0 : -1;
   const els = [...fixed.map((c) => c.el), ...wilds.map(() => wildEl)];
@@ -83,8 +89,11 @@ export function evaluate(cards, fog = false) {
   const walk = (i, acc) => {
     if (i === wilds.length) {
       const all = [...nums, ...acc];
-      const f = { rank: rankOf(elsForRank, all), sum: all.reduce((a, b) => a + b, 0) };
-      if (!best || f.rank > best.rank || (f.rank === best.rank && f.sum > best.sum)) best = f;
+      const rank = rankOf(elsForRank, all);
+      const sum = all.reduce((a, b) => a + b, 0);
+      const bonus = BONUS[rank];
+      const f = { rank, sum, bonus, score: sum + bonus };
+      if (!best || f.score > best.score || (f.score === best.score && (f.rank > best.rank || (f.rank === best.rank && f.sum > best.sum)))) best = f;
       return;
     }
     for (const n of WILD_NUMS[wilds[i].type]) walk(i + 1, [...acc, n]);
@@ -93,12 +102,14 @@ export function evaluate(cards, fog = false) {
   return best;
 }
 
-export const beats = (a, b) => a.rank > b.rank || (a.rank === b.rank && a.sum > b.sum);
-export const sameForm = (a, b) => a.rank === b.rank && a.sum === b.sum;
+// 勝負は score（合計＋役ボーナス）で比べる。同点は引き分け（呼び出し側で先にそろえた方を見る）。
+export const beats = (a, b) => a.score > b.score;
+export const sameForm = (a, b) => a.score === b.score;
 
 export function formationName(f) {
   if (!f) return '';
-  return f.rank === 0 ? `${FOG_NAME} ${f.sum}` : `${FORMATIONS[f.rank]}（${f.sum}）`;
+  if (f.rank === 0) return `${FOG_NAME} ${f.sum}`;
+  return f.bonus ? `${FORMATIONS[f.rank]} ${f.score}（${f.sum}＋${f.bonus}）` : `${FORMATIONS[f.rank]} ${f.sum}`;
 }
 
 // ---------- 準備 ----------
