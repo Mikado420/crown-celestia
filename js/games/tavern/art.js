@@ -1,10 +1,6 @@
-// カード・紋章・正の字など、見た目の部品
+// 酒場のツケ：冒険者カードと卓の紋
 import { baseTab, HEAVY_TAB } from './game.js';
-
-export const esc = (s) =>
-  String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-const svg = (body, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+import { svg, PATHS } from '../../ui.js';
 
 // 職業の紋章（格が上がるほど位の高い職業）
 const ICONS = {
@@ -36,7 +32,7 @@ export function jobOf(rank, deckSize) {
   return JOBS[Math.min(JOBS.length - 1, Math.floor(((rank - 1) / deckSize) * JOBS.length))];
 }
 
-const MUG = '<path d="M5 7h10v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M15 10h2.5a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H15"/><path d="M5 7c0-2 1.5-3 3-3 .8-1 2.2-1.3 3.4-.6C12.3 2.7 15 3 15 7"/>';
+const MUG = PATHS.MUG;
 const BACK = '<path d="M3.5 18.5h17"/><path d="M4.5 16L3.5 7.5l5 3.5 3.5-6 3.5 6 5-3.5-1 8.5z"/><circle cx="12" cy="13" r="1.2"/>';
 
 export function tabOf(view, rank) {
@@ -71,27 +67,3 @@ export const TABLE_ICONS = [
   '<path d="M19 15.5A8 8 0 0 1 8.5 5a8 8 0 1 0 10.5 10.5z"/><path d="M17 4l.5 1.5L19 6l-1.5.5L17 8l-.5-1.5L15 6l1.5-.5z"/>',
   '<path d="M12 21c-3.9 0-6.5-2.6-6.5-6 0-3.1 2.4-4.8 3.4-7.6.6 1.6 1.4 2.4 2.4 2.6C11 7 12 4.7 14 3c0 3.5 4.5 6 4.5 12 0 3.4-2.6 6-6.5 6z"/><path d="M12 21c-1.7 0-2.8-1.1-2.8-2.6 0-1.6 1.6-2.6 2.8-4.4 1.2 1.8 2.8 2.8 2.8 4.4 0 1.5-1.1 2.6-2.8 2.6z"/>',
 ].map((body) => svg(body, 'table-icon'));
-
-export const ICON = {
-  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
-  close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
-  crown: svg(ICONS.crown),
-  mug: svg(MUG),
-};
-
-// 正の字（1画ずつ）。drawn=true で書き順に描くアニメーション
-const STROKES = ['M3 3H17', 'M10 3V17', 'M10 10H15', 'M5 9V17', 'M2 17H18'];
-export function tallyHtml(n, { drawn = false } = {}) {
-  let out = '';
-  let k = 0;
-  for (let left = n; left > 0; left -= 5) {
-    const strokes = STROKES.slice(0, Math.min(5, left))
-      .map((d) => `<path d="${d}" style="--k:${k++}"/>`)
-      .join('');
-    out += `<svg viewBox="0 0 20 20" aria-hidden="true">${strokes}</svg>`;
-  }
-  return `<span class="tally${drawn ? ' drawn' : ''}" aria-label="ツケ${n}">${out}</span>`;
-}
-
-// プレイヤーの色（席順）
-export const SEAT_COLORS = ['#e8b44a', '#6fb1d6', '#d77a8f', '#86c48a', '#b493e0', '#e09a5b'];

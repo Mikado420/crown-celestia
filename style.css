@@ -227,8 +227,29 @@ input[type=text]::placeholder { color: #8c8f86; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 2px 0 #5a3a0f) drop-shadow(0 0 22px #f0bb4b55);
 }
+.title h1.long { font-size: clamp(36px, 12.5vw, 56px); white-space: nowrap; }
 .tagline { margin: 0 0 24px; color: var(--chalk-dim); font-size: 14px; }
 .title-form { width: 100%; display: grid; gap: 10px; }
+
+/* 演目（ゲーム）の選択 */
+.game-pick { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.gp-card {
+  display: grid; justify-items: center; gap: 2px; padding: 10px 6px; border: 0; border-radius: 12px; cursor: pointer;
+  background: #0b111fcc; color: var(--chalk); box-shadow: inset 0 0 0 1.5px #ffffff22;
+  transition: box-shadow .15s, transform .15s;
+}
+.gp-card:hover { transform: translateY(-2px); }
+.gp-card.on { background: linear-gradient(180deg, #2a2213, #14100a); box-shadow: inset 0 0 0 2px var(--mead), 0 0 18px #f0bb4b55; }
+.gp-icon svg { width: 26px; height: 26px; stroke: var(--mead); stroke-width: 1.6; fill: #f0bb4b33; stroke-linecap: round; stroke-linejoin: round; }
+.gp-title { font-family: var(--serif); font-weight: 800; font-size: 16px; }
+.gp-meta { font-size: 10px; color: var(--chalk-dim); }
+.lobby-games { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.lg-tab {
+  display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 0; border-radius: 10px; cursor: pointer;
+  background: #00000055; color: var(--chalk-dim); font-weight: 700; font-size: 13px; box-shadow: inset 0 0 0 1px #ffffff22;
+}
+.lg-tab svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.lg-tab.on { color: var(--mead); box-shadow: inset 0 0 0 2px var(--mead); background: #1a120acc; }
 .join { display: flex; gap: 8px; }
 .join .btn { flex: none; white-space: nowrap; }
 .join input { text-transform: uppercase; letter-spacing: .2em; }

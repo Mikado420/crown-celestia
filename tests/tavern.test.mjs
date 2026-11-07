@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as G from '../js/game.js';
-import { cpuChooseCard, cpuChooseTable } from '../js/cpu.js';
+import * as G from '../js/games/tavern/game.js';
+import { cpuChooseCard, cpuChooseTable } from '../js/games/tavern/cpu.js';
 import { HostController } from '../js/host.js';
 
 const players = (n) => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, name: `P${i}`, isCpu: true }));

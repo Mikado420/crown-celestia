@@ -132,6 +132,29 @@ export const sfx = {
     });
   },
   ambience,
+  // 晩餐会：幕が上がる音
+  curtain: () => noise({ dur: 0.45, gain: 0.07, freq: 900 }),
+  // 封蝋を押す音
+  stamp: () => {
+    noise({ dur: 0.06, gain: 0.09, freq: 300 });
+    tone(110, { dur: 0.16, type: 'sine', gain: 0.09, to: 70 });
+  },
+  // すり替え（素早い2回の衣擦れ）
+  swap: () => {
+    noise({ dur: 0.16, gain: 0.07, freq: 1500 });
+    noise({ at: 0.18, dur: 0.16, gain: 0.07, freq: 2100 });
+    tone(520, { at: 0.05, dur: 0.25, type: 'triangle', gain: 0.03, to: 780 });
+  },
+  // 道化師の笑い（上下する音）
+  jester: () => {
+    [880, 660, 990, 740, 1100, 830].forEach((f, i) => tone(f, { at: i * 0.08, dur: 0.12, type: 'square', gain: 0.025 }));
+  },
+  // 銅鑼
+  gong: () => {
+    tone(98, { dur: 1.6, type: 'sine', gain: 0.12 });
+    tone(147, { dur: 1.2, type: 'sine', gain: 0.05 });
+    tone(262, { dur: 0.6, type: 'triangle', gain: 0.02 });
+  },
   alarm: () => {
     tone(520, { dur: 0.14, type: 'square', gain: 0.04 });
     tone(390, { at: 0.16, dur: 0.22, type: 'square', gain: 0.04 });

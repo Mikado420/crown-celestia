@@ -1,35 +1,29 @@
-// ホスト（部屋を作った人）のブラウザで動く進行役。
-// エンジンの状態を持ち、CPUと時間切れを処理し、各プレイヤーに見える情報だけを送る。
-// 通信手段には依存しない（send を差し替えればテストでも動く）。
-import * as G from './game.js';
-import { cpuChooseCard, cpuChooseTable } from './cpu.js';
-
-export const TIMING = {
-  chooseMs: 30000, // カードを選ぶ制限時間
-  tableMs: 20000, // 卓を選ぶ制限時間
-  revealMs: 1500, // 出し札を表に返してから着席が始まるまで
-  stepMs: 650, // 1人が着席する演出の長さ
-  takeMs: 2000, // 満席・相席お断りでツケを払う演出の長さ
-  roundBreakMs: 9000, // ラウンド間の休憩
-  cpuMinMs: 1200,
-  cpuMaxMs: 3500,
-};
-
-// 着席の演出にかかる時間（画面側もこの値に合わせて動く）
-export function resolutionMs(resolution, timing = TIMING) {
-  const steps = resolution.events.reduce((sum, e) => sum + (e.type === 'seat' ? timing.stepMs : timing.takeMs), 0);
-  return timing.revealMs + steps + 600;
-}
+// ホスト（部屋を作った人）のブラウザで動く進行役。ゲームの種類には依存しない。
+// 参加者の管理、ゲームの状態、制限時間、CPU、各プレイヤーに見える情報の配信を受け持つ。
+// ゲームごとの違いは games/*/mode.js が受け持つ。通信手段にも依存しない（send を差し替えればテストでも動く）。
+import { GAMES, DEFAULT_GAME } from './games/index.js';
 
 // 画面の小さなプレイヤー欄に収まるよう短い名前にしている
 const CPU_NAMES = ['ドワーフのボルグ', '詩人リュート', '魔導士ミル', '傭兵ガルド', '盗賊チッタ', '賢者オルヴァン', '竜騎士セラ'];
 
 export class HostController {
-  constructor({ hostName, send, onView, roomCode = null, timing = TIMING, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t), random = Math.random }) {
+  constructor({
+    hostName,
+    send,
+    onView,
+    roomCode = null,
+    gameId = DEFAULT_GAME,
+    timings = {},
+    now = () => Date.now(),
+    setTimer = (fn, ms) => setTimeout(fn, ms),
+    clearTimer = (t) => clearTimeout(t),
+    random = Math.random,
+  }) {
     this.send = send; // (connId, message) => void
     this.onView = onView; // ホスト自身の画面に渡す
     this.roomCode = roomCode;
-    this.timing = timing;
+    this.gameId = GAMES[gameId] ? gameId : DEFAULT_GAME;
+    this.timings = timings;
     this.now = now;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
@@ -38,6 +32,7 @@ export class HostController {
     this.players = [{ id: this.hostId, name: hostName, isCpu: false, connId: null }];
     this.nextId = 1;
     this.state = null;
+    this.mode = null;
     this.timers = [];
     this.phaseKey = null;
     this.deadline = null;
@@ -45,9 +40,27 @@ export class HostController {
     this.lastAnimSeq = 0;
   }
 
+  get game() {
+    return GAMES[this.gameId];
+  }
+
+  timingFor(mode) {
+    return { ...mode.timing, ...(this.timings[mode.id] ?? {}) };
+  }
+
   // ---- ロビー ----
+  setGame(id) {
+    if (this.state || !GAMES[id]) return;
+    if (this.players.length > GAMES[id].mode.maxPlayers) {
+      this.notify(this.hostId, { type: 'error', message: `${GAMES[id].title}は${GAMES[id].mode.maxPlayers}人までです` });
+      return;
+    }
+    this.gameId = id;
+    this.broadcast();
+  }
+
   addCpu() {
-    if (this.state || this.players.length >= G.MAX_PLAYERS) return;
+    if (this.state || this.players.length >= this.game.mode.maxPlayers) return;
     const used = new Set(this.players.map((p) => p.name));
     const name = CPU_NAMES.find((n) => !used.has(n)) ?? `CPU${this.nextId}`;
     this.players.push({ id: `cpu${this.nextId++}`, name, isCpu: true, connId: null });
@@ -65,7 +78,8 @@ export class HostController {
 
   handleJoin(connId, name) {
     if (this.state) return this.send(connId, { type: 'error', message: 'すでに大会が始まっています' });
-    if (this.players.length >= G.MAX_PLAYERS) return this.send(connId, { type: 'error', message: '満員です（最大6人）' });
+    const max = this.game.mode.maxPlayers;
+    if (this.players.length >= max) return this.send(connId, { type: 'error', message: `満員です（最大${max}人）` });
     const clean = String(name ?? '').trim().slice(0, 16) || '名無しの冒険者';
     const id = `p${this.nextId++}`;
     this.players.push({ id, name: clean, isCpu: false, connId });
@@ -102,10 +116,11 @@ export class HostController {
 
   // ---- 進行 ----
   start() {
-    if (this.players.length < G.MIN_PLAYERS) return false;
+    const mode = this.game.mode;
+    if (this.players.length < mode.minPlayers || this.players.length > mode.maxPlayers) return false;
     const seed = Math.floor(this.random() * 2 ** 32);
-    this.state = G.createGame(this.players, { seed });
-    G.startRound(this.state);
+    this.mode = mode;
+    this.state = mode.create(this.players, { seed });
     this.lastAnimSeq = 0;
     this.busyUntil = 0;
     this.phaseKey = null;
@@ -119,6 +134,7 @@ export class HostController {
     // 抜けた人（代打）は外して、もう一度ロビーから
     this.players = this.players.filter((p) => p.id === this.hostId || p.connId || p.id.startsWith('cpu'));
     this.state = null;
+    this.mode = null;
     this.phaseKey = null;
     this.broadcast();
   }
@@ -127,7 +143,7 @@ export class HostController {
   closeRoom() {
     this.clearAll();
     for (const p of this.players) {
-      if (p.connId) this.send(p.connId, { type: 'closed', message: 'ホストが店を閉めました' });
+      if (p.connId) this.send(p.connId, { type: 'closed', message: 'ホストが部屋を閉じました' });
     }
     this.onView = null;
   }
@@ -135,6 +151,7 @@ export class HostController {
   hostAction(msg) {
     if (msg.type === 'addCpu') return this.addCpu();
     if (msg.type === 'remove') return this.removePlayer(msg.id);
+    if (msg.type === 'setGame') return this.setGame(msg.id);
     if (msg.type === 'start') return this.start();
     if (msg.type === 'restart') return this.restart();
     this.act(this.hostId, msg);
@@ -143,9 +160,7 @@ export class HostController {
   act(pid, msg) {
     if (!this.state) return;
     try {
-      if (msg.type === 'play') G.playCard(this.state, pid, msg.rank);
-      else if (msg.type === 'chooseTable') G.chooseTable(this.state, pid, msg.index);
-      else return;
+      if (!this.mode.act(this.state, pid, msg)) return;
     } catch (e) {
       this.notify(pid, { type: 'error', message: e.message });
       return;
@@ -171,63 +186,38 @@ export class HostController {
   afterChange() {
     const s = this.state;
     const now = this.now();
-    // 新しい着席処理があれば、演出が終わるまで次の行動を待たせる
-    if (s.resolution && s.resolution.seq !== this.lastAnimSeq) {
-      this.lastAnimSeq = s.resolution.seq;
-      this.busyUntil = now + resolutionMs(s.resolution, this.timing);
+    const timing = this.timingFor(this.mode);
+    // 新しい演出があれば、終わるまで次の行動を待たせる
+    const anim = this.mode.animation(s, timing);
+    if (anim && anim.seq !== this.lastAnimSeq) {
+      this.lastAnimSeq = anim.seq;
+      this.busyUntil = now + anim.ms;
     }
     const wait = Math.max(0, this.busyUntil - now);
-    const key = `${s.round}-${s.turn}-${s.phase}`;
+    const key = this.mode.phaseKey(s);
     if (key !== this.phaseKey) {
       this.phaseKey = key;
       this.clearAll();
-      this.schedule(wait);
+      this.deadline = null;
+      const { cpuMinMs, cpuMaxMs } = timing;
+      this.mode.schedule(
+        {
+          state: s,
+          timing,
+          random: this.random,
+          later: (ms, fn) => this.later(ms, fn),
+          act: (pid, msg) => this.act(pid, msg),
+          apply: (fn) => {
+            fn();
+            this.afterChange();
+          },
+          setDeadline: (ms) => (this.deadline = this.now() + ms),
+          cpuDelay: () => cpuMinMs + this.random() * (cpuMaxMs - cpuMinMs),
+        },
+        wait,
+      );
     }
     this.broadcast();
-  }
-
-  cpuDelay() {
-    const { cpuMinMs, cpuMaxMs } = this.timing;
-    return cpuMinMs + this.random() * (cpuMaxMs - cpuMinMs);
-  }
-
-  schedule(wait) {
-    const s = this.state;
-    const now = this.now();
-    this.deadline = null;
-    if (s.phase === 'choosing') {
-      this.deadline = now + wait + this.timing.chooseMs;
-      for (const p of s.players) {
-        if (!p.isCpu) continue;
-        this.later(wait + this.cpuDelay(), () => {
-          if (s.phase !== 'choosing' || s.plays[p.id] != null) return;
-          this.act(p.id, { type: 'play', rank: cpuChooseCard(s, p.id, this.random) });
-        });
-      }
-      this.later(wait + this.timing.chooseMs, () => {
-        if (s.phase !== 'choosing') return;
-        // 時間切れの人はCPUと同じ考え方で自動的に出す
-        for (const p of s.players) {
-          if (s.phase === 'choosing' && s.plays[p.id] == null) G.playCard(s, p.id, cpuChooseCard(s, p.id, this.random));
-        }
-        this.afterChange();
-      });
-    } else if (s.phase === 'choosingTable') {
-      const who = s.players.find((p) => p.id === s.awaiting);
-      const ms = who.isCpu ? wait + this.timing.revealMs + this.cpuDelay() : wait + this.timing.revealMs + this.timing.tableMs;
-      if (!who.isCpu) this.deadline = now + ms;
-      this.later(ms, () => {
-        if (s.phase !== 'choosingTable') return;
-        this.act(who.id, { type: 'chooseTable', index: cpuChooseTable(s) });
-      });
-    } else if (s.phase === 'roundEnd') {
-      this.deadline = now + wait + this.timing.roundBreakMs;
-      this.later(wait + this.timing.roundBreakMs, () => {
-        if (s.phase !== 'roundEnd') return;
-        G.nextRound(s);
-        this.afterChange();
-      });
-    }
   }
 
   lobbyMessage(you) {
@@ -236,6 +226,7 @@ export class HostController {
       you,
       code: this.roomCode,
       hostId: this.hostId,
+      gameId: this.gameId,
       players: this.players.map((p) => ({ id: p.id, name: p.name, isCpu: p.isCpu })),
     };
   }
@@ -248,7 +239,8 @@ export class HostController {
       if (!this.state) {
         msg = this.lobbyMessage(p.id);
       } else {
-        const view = G.viewFor(this.state, p.id);
+        const view = this.mode.viewFor(this.state, p.id);
+        view.gameId = this.gameId;
         view.deadlineIn = this.deadline ? Math.max(0, this.deadline - now) : null;
         view.waitIn = Math.max(0, this.busyUntil - now);
         view.isHost = p.id === this.hostId;
