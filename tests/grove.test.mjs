@@ -61,7 +61,7 @@ test('すり替え：抜いた人物は誰も見ず、他人の情報は古く�
   assert.throws(() => G.investigate(s, 'p1', 'swap', 0));
 });
 
-test('2周で告発に移り、得点は「賭け×（外れた人数＋1）」、外れは−賭け、本当の証言は+1', () => {
+test('2周で告発に移り、得点は「賭け×（外れた人数＋1）」、外れは−賭け、犯人をクロと言い当てたら+1（1事件1点まで）', () => {
   const s = fixed(); // 犯人は二の席（7）
   const turns = [
     ['p0', 1, 'black'], // 本当
@@ -90,7 +90,11 @@ test('2周で告発に移り、得点は「賭け×（外れた人数＋1）」�
   assert.equal(e.p0.honest, 2);
   assert.equal(e.p1.honest, 1);
   assert.equal(e.p2.honest, 1);
-  assert.equal(s.players[0].score, 6);
+  // クロ的中：p0（二の席をクロ）とp2（二の席をクロ）は+1。p1はシロの本当の証言だけなので0
+  assert.equal(e.p0.testimonyPts, 1);
+  assert.equal(e.p1.testimonyPts, 0);
+  assert.equal(e.p2.testimonyPts, 1);
+  assert.equal(s.players[0].score, 2 * (1 + 1) + 1);
 });
 
 test('CPUの確率：3人とも分かっていれば確実に当てる', () => {

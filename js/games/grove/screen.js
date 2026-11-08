@@ -528,7 +528,7 @@ function renderLedger() {
         <span class="avatar">${esc(initial(p.name))}</span>
         <span class="lname">${esc(nameOf(e.pid))}</span>
         <span class="g-acc">${e.correct ? '的中' : '外れ'}<small>${SLOT_NAMES[e.slot]}・${e.stake === 2 ? '強気' : 'ふつう'}</small></span>
-        <span class="g-pts">${e.accusePts >= 0 ? '+' : ''}${e.accusePts}<small>証言 +${e.honest}${e.lies ? `（嘘${e.lies}）` : ''}</small></span>
+        <span class="g-pts">${e.accusePts >= 0 ? '+' : ''}${e.accusePts}<small>${e.testimonyPts ? `クロ的中 +${e.testimonyPts}` : '証言 +0'}${e.lies ? `（嘘${e.lies}）` : ''}</small></span>
         <span class="ltotal">${p.score}</span>
       </li>`;
     })

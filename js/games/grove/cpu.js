@@ -62,14 +62,17 @@ export function cpuInvestigate(state, pid, random = Math.random) {
   return { action: 'look', slot: pick[Math.floor(random() * pick.length)] };
 }
 
+// 得点になるのは「犯人をクロと言い当てた証言」だけなので、本命をクロと言うことが多い。
+// ときどき嘘で惑わせる（本命をシロ、ありえない席をクロ）。
 export function cpuTestify(state, pid, random = Math.random) {
   const probs = culpritProbs(state, pid);
   const likely = argmax(probs);
   const unlikely = argmin(probs);
-  if (random() < 0.6) {
-    return random() < 0.5 ? { slot: likely, claim: 'black' } : { slot: unlikely, claim: 'white' };
-  }
-  return random() < 0.5 ? { slot: unlikely, claim: 'black' } : { slot: likely, claim: 'white' };
+  const r = random();
+  if (r < 0.45) return { slot: likely, claim: 'black' };
+  if (r < 0.6) return { slot: unlikely, claim: 'white' };
+  if (r < 0.8) return { slot: unlikely, claim: 'black' };
+  return { slot: likely, claim: 'white' };
 }
 
 export function cpuAccuse(state, pid, random = Math.random) {

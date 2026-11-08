@@ -6,6 +6,7 @@ export const CHIPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, JESTER];
 export const SLOT_COUNT = 3;
 export const SLOT_NAMES = ['一の席', '二の席', '三の席'];
 export const LAPS = 2;
+export const BLACK_HIT_PTS = 1; // 犯人を「クロ」と言い当てた証言の得点（1事件に1回まで）
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 6;
 
@@ -201,10 +202,12 @@ function resolveCase(state) {
     const accusePts = correct ? a.stake * (wrongCount + 1) : -a.stake;
     const said = state.history.filter((h) => h.pid === p.id && h.testimony).map((h) => h.testimony);
     const honest = said.filter((t) => isHonest(t, culprit)).length;
-    const total = accusePts + honest;
+    // 証言の得点：犯人を「クロ」と言い当てていたら+1（1事件に1点まで）。シロの証言は得点にならない。
+    const testimonyPts = said.some((t) => t.claim === 'black' && t.slot === culprit) ? BLACK_HIT_PTS : 0;
+    const total = accusePts + testimonyPts;
     p.score += total;
     p.caseScores.push(total);
-    return { pid: p.id, slot: a.slot, stake: a.stake, correct, accusePts, honest, lies: said.length - honest, total };
+    return { pid: p.id, slot: a.slot, stake: a.stake, correct, accusePts, testimonyPts, honest, lies: said.length - honest, total };
   });
   state.resultSeq += 1;
   state.result = {

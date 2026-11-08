@@ -25,8 +25,9 @@ export const MAGIC_TYPES = Object.keys(MAGIC);
 
 export const FORMATIONS = ['', 'バラ', '連番', '同じ属性', '同じ数字', '同じ属性の連番'];
 export const FOG_NAME = '合計のみ';
-// 役ボーナス（rank の添字）：バラ0・連番1・同じ属性2・同じ数字2・同じ属性の連番3
-export const BONUS = [0, 0, 1, 2, 2, 3];
+// 役ボーナス（rank の添字）：バラ0・連番2・同じ属性4・同じ数字5・同じ属性の連番9
+// 同じ属性の連番 8-9-10（36）が、属性違いの 10-10-10（35）を上回るように決めてある。
+export const BONUS = [0, 0, 2, 4, 5, 9];
 
 export const handSizeFor = (n) => (n === 2 ? 7 : n === 3 ? 6 : 5);
 export const elementCountFor = (n) => (n >= 5 ? 7 : 6);
